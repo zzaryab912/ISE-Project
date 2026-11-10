@@ -1,4 +1,6 @@
 #include "barcodeGenerator.h"
+
+#include <algorithm>
 #include <cctype>
 
 using namespace std;
@@ -38,19 +40,11 @@ string getCode128Pattern(int value) {
 }
 
 // 1. Input Validation: Check 6 digits and first digit != '0'
-bool isValid6DigitInput(const string& input) {
-    if (input.length() != 6) {
-        return false;
-    }
-    if (input[0] < '1' || input[0] > '9') {
-        return false;
-    }
-    for (char c : input) {
-        if (!isdigit(static_cast<unsigned char>(c))) {
-            return false;
-        }
-    }
-    return true;
+bool isValid6DigitInput(const string& s) {
+    return s.size() == 6 &&
+        s[0] != '0' &&
+        all_of(s.begin(), s.end(),
+            [](unsigned char c) { return isdigit(c); });
 }
 
 // 2. Modulo 103 Checksum Calculation
