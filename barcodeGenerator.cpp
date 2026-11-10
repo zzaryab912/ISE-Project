@@ -58,40 +58,30 @@ int calculateChecksum(int startValue, const string& code6) {
     return sum % 103;
 }
 
-// 3. Complete 121-bit Bitstream Assembly
 string generateBarcodeBits(const string& code6) {
+    const int START_B = 104;
+    const int STOP_CODE = 106;
+    const int QUIET = 10;
+
     if (!isValid6DigitInput(code6)) {
         return "";
     }
 
-    const int START_B = 104;
-    const int STOP_CODE = 106;
-    int checksum = calculateChecksum(START_B, code6);
+    string bits;
+    bits.reserve(121);                      // memory ek hi baar allocate
 
-    string bits = "";
-
-    // 10-bit Quiet Zone (Left)
-    bits.append(10, '0');
-
-    // Start B marker
+    bits.append(QUIET, '0');                // left quiet zone
     bits += getCode128Pattern(START_B);
 
-    // 6 Data characters
     for (char c : code6) {
-        int val = static_cast<int>(c) - 32;
-        bits += getCode128Pattern(val);
+        bits += getCode128Pattern(c - 32);  // Set B value
     }
 
-    // Checksum
-    bits += getCode128Pattern(checksum);
-
-    // Stop marker
+    bits += getCode128Pattern(calculateChecksum(START_B, code6));
     bits += getCode128Pattern(STOP_CODE);
+    bits.append(QUIET, '0');                // right quiet zone
 
-    // 10-bit Quiet Zone (Right)
-    bits.append(10, '0');
-
-    return bits;
+    return bits;                            // hamesha 121 bits
 }
 
 // 4. Strict Multi-Point Verification
