@@ -52,3 +52,94 @@ bool isValid6DigitInput(const string& input) {
     }
     return true;
 }
+
+// 2. Modulo 103 Checksum Calculation
+int calculateChecksum(int startValue, const string& code6) {
+    int sum = startValue;
+    for (size_t i = 0; i < code6.length(); ++i) {
+        int charValue = static_cast<int>(code6[i]) - 32;
+        int weight = static_cast<int>(i) + 1; // Position index: 1, 2, 3, 4, 5, 6
+        sum += (charValue * weight);
+    }
+    return sum % 103;
+}
+
+// 3. Complete 121-bit Bitstream Assembly
+string generateBarcodeBits(const string& code6) {
+    if (!isValid6DigitInput(code6)) {
+        return "";
+    }
+
+    const int START_B = 104;
+    const int STOP_CODE = 106;
+    int checksum = calculateChecksum(START_B, code6);
+
+    string bits = "";
+
+    // 10-bit Quiet Zone (Left)
+    bits.append(10, '0');
+
+    // Start B marker
+    bits += getCode128Pattern(START_B);
+
+    // 6 Data characters
+    for (char c : code6) {
+        int val = static_cast<int>(c) - 32;
+        bits += getCode128Pattern(val);
+    }
+
+    // Checksum
+    bits += getCode128Pattern(checksum);
+
+    // Stop marker
+    bits += getCode128Pattern(STOP_CODE);
+
+    // 10-bit Quiet Zone (Right)
+    bits.append(10, '0');
+
+    return bits;
+}
+
+// 4. Strict Multi-Point Verification
+bool verifyEncoding(const string& code6, const string& generatedBits) {
+    // Total bits check: 10 + 11 + (6 * 11) + 11 + 13 + 10 = 121 bits
+    if (generatedBits.length() != 121) {
+        return false;
+    }
+
+    // Quiet Zones check
+    if (generatedBits.substr(0, 10) != "0000000000") {
+        return false;
+    }
+    if (generatedBits.substr(111, 10) != "0000000000") {
+        return false;
+    }
+
+    // Start B check (bits 10 to 20)
+    if (generatedBits.substr(10, 11) != getCode128Pattern(104)) {
+        return false;
+    }
+
+    // 6 Data Digits check (each 11 bits)
+    size_t offset = 21;
+    for (char c : code6) {
+        int val = static_cast<int>(c) - 32;
+        if (generatedBits.substr(offset, 11) != getCode128Pattern(val)) {
+            return false;
+        }
+        offset += 11;
+    }
+
+    // Checksum check (bits 87 to 97)
+    int expectedChecksum = calculateChecksum(104, code6);
+    if (generatedBits.substr(87, 11) != getCode128Pattern(expectedChecksum)) {
+        return false;
+    }
+
+    // Stop pattern check (bits 98 to 110, length 13)
+    if (generatedBits.substr(98, 13) != getCode128Pattern(106)) {
+        return false;
+    }
+
+    return true;
+}
