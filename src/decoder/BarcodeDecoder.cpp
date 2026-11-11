@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstddef>
 #include <exception>
 #include <opencv2/imgproc.hpp>
@@ -205,7 +206,6 @@ bool BarcodeDecoder::readCandidate(const vector<int>& widths,
 {
     code.clear();
 
-    // One full candidate has 57 alternating white/black runs.
     if (widths.size() != 57) {
         return false;
     }
@@ -216,55 +216,60 @@ bool BarcodeDecoder::readCandidate(const vector<int>& widths,
         }
     }
 
-    // Start B occupies six runs containing eleven modules.
-    double startWidth = 0.0;
+    // Start + six digits + checksum + stop:
+    // 11 + 66 + 11 + 13 = 101 modules.
+    // Exclude the two quiet zones.
+    double barcodeWidth = 0.0;
 
-    for (int index = 1; index <= 6; ++index) {
-        startWidth += widths[index];
+    for (int i = 1; i <= 55; ++i) {
+        barcodeWidth += widths[i];
     }
 
-    const double moduleWidth = startWidth / 11.0;
+    const double moduleWidth = barcodeWidth / 101.0;
 
     if (!std::isfinite(moduleWidth) || moduleWidth < 1.0) {
         return false;
     }
 
-    // Require real white margins on both sides of the barcode.
-    if (widths.front() < 10.0 * moduleWidth ||
-        widths.back() < 10.0 * moduleWidth) {
+    // Allow one pixel of boundary-rounding uncertainty.
+    constexpr double quietAllowance = 1.0;
+    const double requiredQuiet = 10.0 * moduleWidth;
+
+    if (widths.front() + quietAllowance < requiredQuiet ||
+        widths.back() + quietAllowance < requiredQuiet) {
         return false;
     }
 
-    // Chosen measurement allowance; verify with actual camera crops.
-    const double tolerance = 0.45 * moduleWidth;
+    const double runTolerance =
+        std::max(1.0, 0.45 * moduleWidth);
 
-    // Compare measured runs with one pattern from Member 2's table.
-    auto matchesSymbol = [&](int firstRun, int value) -> bool {
+    // Return mean squared error in module units.
+    // Return -1 when the symbol does not match.
+    auto symbolError = [&](int firstRun, int value) -> double {
         const string pattern = getCode128Pattern(value);
 
         const bool stop = value == 106;
         const size_t expectedModules = stop ? 13 : 11;
         const int expectedRuns = stop ? 7 : 6;
 
-        if (firstRun < 0 ||
-            firstRun > static_cast<int>(widths.size()) - expectedRuns) {
-            return false;
-        }
-
-        if (pattern.size() != expectedModules ||
+        if (firstRun < 1 ||
+            firstRun + expectedRuns > 56 ||
+            pattern.size() != expectedModules ||
             pattern.front() != '1' ||
             pattern.back() != (stop ? '1' : '0')) {
-            return false;
+            return -1.0;
         }
 
         size_t bit = 0;
         int run = 0;
+        double error = 0.0;
 
         while (bit < pattern.size()) {
             const char colour = pattern[bit];
 
-            if (colour != '0' && colour != '1') {
-                return false;
+            if ((colour != '0' && colour != '1') ||
+                run >= expectedRuns) {
+                return -1.0;
             }
 
             int modules = 0;
@@ -275,72 +280,118 @@ bool BarcodeDecoder::readCandidate(const vector<int>& widths,
                 ++bit;
             }
 
-            if (run >= expectedRuns) {
-                return false;
-            }
-
-            const double expectedPixels = modules * moduleWidth;
+            const double expectedPixels =
+                modules * moduleWidth;
 
             const double difference =
                 std::abs(widths[firstRun + run] - expectedPixels);
 
-            if (difference > tolerance) {
-                return false;
+            if (difference > runTolerance) {
+                return -1.0;
             }
+
+            const double normalized = difference / moduleWidth;
+            error += normalized * normalized;
 
             ++run;
         }
 
-        return run == expectedRuns;
+        return run == expectedRuns
+            ? error / expectedRuns
+            : -1.0;
     };
 
-    // Verify Start B.
-    if (!matchesSymbol(1, 104)) {
+    // Validate Start B and Stop.
+    if (symbolError(1, 104) < 0.0 ||
+        symbolError(49, 106) < 0.0) {
         return false;
     }
 
     string decoded;
     decoded.reserve(6);
 
-    // Read exactly six digit symbols.
+    // Reject digit matches with nearly equal scores.
+    // Validate this threshold against actual camera crops.
+    constexpr double minimumScoreGap = 0.05;
+
     for (int digit = 0; digit < 6; ++digit) {
-        int matchedValue = -1;
+        int bestValue = -1;
 
-        // Set B values 16 through 25 represent '0' through '9'.
+        double bestError =
+            std::numeric_limits<double>::infinity();
+
+        double secondError =
+            std::numeric_limits<double>::infinity();
+
+        // Set B values 16–25 represent digits 0–9.
         for (int value = 16; value <= 25; ++value) {
-            if (matchesSymbol(7 + digit * 6, value)) {
-                // Reject a measurement matching more than one digit.
-                if (matchedValue != -1) {
-                    return false;
-                }
+            const double error =
+                symbolError(7 + digit * 6, value);
 
-                matchedValue = value;
+            if (error < 0.0) {
+                continue;
+            }
+
+            if (error < bestError) {
+                secondError = bestError;
+                bestError = error;
+                bestValue = value;
+            } else if (error < secondError) {
+                secondError = error;
             }
         }
 
-        if (matchedValue == -1) {
+        if (bestValue == -1 ||
+            secondError - bestError < minimumScoreGap) {
             return false;
         }
 
         decoded.push_back(
-            static_cast<char>(matchedValue + 32)
+            static_cast<char>(bestValue + 32)
         );
     }
 
-    // Apply Member 2's validation, including no leading zero.
+    // Enforce exactly six digits and no leading zero.
     if (!isValid6DigitInput(decoded)) {
         return false;
     }
 
-    // Compare the observed checksum bars with the expected pattern.
-    const int checksum = calculateChecksum(104, decoded);
+   const int checksum = calculateChecksum(104, decoded);
 
-    if (checksum < 0 ||
-        checksum > 102 ||
-        !matchesSymbol(43, checksum) ||
-        !matchesSymbol(49, 106)) {
-        return false;
+if (checksum < 0 || checksum > 102) {
+    return false;
+}
+
+// Decode the observed checksum independently.
+int observedChecksum = -1;
+
+double bestChecksumError =
+    std::numeric_limits<double>::infinity();
+
+double secondChecksumError =
+    std::numeric_limits<double>::infinity();
+
+for (int value = 0; value <= 102; ++value) {
+    const double error = symbolError(43, value);
+
+    if (error < 0.0) {
+        continue;
     }
+
+    if (error < bestChecksumError) {
+        secondChecksumError = bestChecksumError;
+        bestChecksumError = error;
+        observedChecksum = value;
+    } else if (error < secondChecksumError) {
+        secondChecksumError = error;
+    }
+}
+
+// Require the correct checksum and reject ambiguous readings.
+if (observedChecksum != checksum ||
+    secondChecksumError - bestChecksumError < minimumScoreGap) {
+    return false;
+}
 
     code = decoded;
     return true;
