@@ -183,7 +183,7 @@ QPushButton *makeOptionCard(QWidget *parent, const QString &title,
         " border: 2px solid #d1d1d1; border-radius: 19px; }"
         "QPushButton:hover { background: #fafafa; border-color: #bdbdbd; }"
         "QPushButton:pressed { background: #f4f4f4; }"
-        "QPushButton:focus { border-color: #929292; }"));
+        "QPushButton:focus { border-color: #d1d1d1; }"));
     auto *titleLabel = makeTextLabel(button, title, QRect(21, 17, 434, 27),
                                      16, QFont::Medium, titleColor);
     auto *descriptionLabel = makeTextLabel(button, description, QRect(21, 39, 434, 24),
@@ -229,42 +229,23 @@ public:
 
         brandPanel_ = new QLabel(canvas);
         brandPanel_->setGeometry(0, 0, kBrandWidth, kContentHeight);
+        brandPanel_->setAccessibleName(QStringLiteral("Eyeris Barcode Scanner"));
         const QPixmap background(assetPath(QStringLiteral("eyeris-background.png")));
         if (!background.isNull()) {
-            brandPanel_->setPixmap(background.scaled(brandPanel_->size(), Qt::IgnoreAspectRatio,
-                                                       Qt::SmoothTransformation));
+            const QPixmap scaled = background.scaled(brandPanel_->size(), Qt::IgnoreAspectRatio,
+                                                      Qt::SmoothTransformation);
+            QPixmap panel(scaled.size());
+            panel.fill(Qt::transparent);
+            QPainter painter(&panel);
+            // Extend the image beneath its transparent lower-left corner; the
+            // native window then clips it to the window's own corner radius.
+            constexpr int corner = 19;
+            painter.drawPixmap(QRect(0, kContentHeight - corner, corner, corner), scaled,
+                               QRect(corner, kContentHeight - corner, 1, corner));
+            painter.drawPixmap(0, 0, scaled);
+            painter.end();
+            brandPanel_->setPixmap(panel);
         }
-
-        auto *brand = new QLabel(QStringLiteral("Eyeris"), canvas);
-        brand->setGeometry(72, 193, 423, 153);
-        brand->setContentsMargins(0, 0, 0, 0);
-        brand->setAlignment(Qt::AlignCenter);
-        QFont brandFont(systemFontFamily());
-        brandFont.setPixelSize(128);
-        brandFont.setWeight(QFont::Thin);
-        brandFont.setVariableAxis(QFont::Tag("wdth"), 132.0f);
-        brandFont.setVariableAxis(QFont::Tag("wght"), 120.7f);
-        brandFont.setLetterSpacing(QFont::AbsoluteSpacing, 6.4);
-        const QString brandText = QStringLiteral("Eyeris");
-        for (int pixelSize = 128; pixelSize >= 64; --pixelSize) {
-            brandFont.setPixelSize(pixelSize);
-            const QFontMetricsF metrics(brandFont);
-            const QRectF bounds = metrics.tightBoundingRect(brandText);
-            const qreal left = std::min(0.0, bounds.left());
-            const qreal right = std::max(metrics.horizontalAdvance(brandText), bounds.right());
-            if (right - left <= brand->width() - 12 &&
-                metrics.height() <= brand->height() - 12) {
-                break;
-            }
-        }
-        brand->setFont(brandFont);
-        brand->setStyleSheet("color: white; background: transparent;");
-
-        auto *subtitle = new QLabel(QStringLiteral("Barcode Scanner"), canvas);
-        subtitle->setGeometry(151, 346, 265, 29);
-        subtitle->setAlignment(Qt::AlignCenter);
-        subtitle->setFont(uiFont(24, QFont::Light, 4.32));
-        subtitle->setStyleSheet("color: white; background: transparent;");
 
         pages_ = new QStackedWidget(canvas);
         pages_->setGeometry(kBrandWidth, 0, kContentWidth - kBrandWidth, kContentHeight);
@@ -379,7 +360,7 @@ private:
     {
         generatePage_ = newPage();
         addBackButton(generatePage_, Page::Home);
-        makeHeading(QStringLiteral("Generate Barcode"), generatePage_, 71, 100);
+        makeHeading(QStringLiteral("Generate Barcode"), generatePage_, 71, 97);
 
         makeTextLabel(generatePage_, QStringLiteral("Enter a 6-digit code (Code 128)"),
                       QRect(52, 193, 440, 24), 16, QFont::Medium, kBody);
