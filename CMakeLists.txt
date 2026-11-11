@@ -7,6 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc imgcodecs videoio objdetect)
 
-add_executable(BarcodeApp main.cpp barcodeGenerator.cpp BarcodePlotter.cpp)
+add_executable(BarcodeApp main.cpp barcodeGenerator.cpp BarcodePlotter.cpp BarcodeImageIO.cpp camera-harness.cpp BarcodeDecoder.cpp)
 target_include_directories(BarcodeApp PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(BarcodeApp PRIVATE Qt6::Widgets ${OpenCV_LIBS})
