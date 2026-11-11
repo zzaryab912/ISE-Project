@@ -1,20 +1,13 @@
-#ifndef READER_CONTRACTS_H
-#define READER_CONTRACTS_H
+#pragma once
+
+//this file is shared between member 4 (rayyan) and member 5 (rayan dar). so ensure that only one 
+//instance of this file remains at end. overlapping functions
 
 #include <string>
-#include <opencv2/core/mat.hpp>         // makes mat for OpenCV available
+#include <opencv2/core/mat.hpp>
 
-using namespace std;
+enum class ImageStatus{
 
-// structure
-//      imageStatus Enum Class
-//      InputResult struct 
-
-enum class ImageStatus {
-
-    // all different image statuses 
-    // numbers assgined to each option in order, starting from 0
-    
     Ready,
     NoCandidate,
     MultipleCandidates,
@@ -23,17 +16,17 @@ enum class ImageStatus {
     ProcessingError
 };
 
-struct InputResult {                // this is what person 4 returns, person 1 receives this
-    ImageStatus status;             // it contains the status, a message with it, and barcode and preview
-    string message;                 // mat is an OpenCV object that can hold image pixels in memory 
+struct InputResult{
+
+    ImageStatus status;
+    std::string message;
     cv::Mat barcode;
     cv::Mat preview;
 };
 
-struct DecodeResult {               // this is what person 5 returns, it contains bool result, a message and the decoded code
-    bool found;
-    string message;
-    string code;
-};
+struct DecodeResult{
 
-#endif
+    bool found;
+    std::string message;
+    std::string code;
+};
