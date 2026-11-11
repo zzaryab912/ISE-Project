@@ -1,7 +1,6 @@
 #pragma once
 
 #include "ReaderContracts.h"
-#include <QString>
 #include <string>
 #include <vector>
 #include <opencv2/core.hpp>
@@ -10,7 +9,7 @@
 class ImageSource{
 
 public:
-    InputResult loadFile(const QString& path) const;
+    InputResult loadFile(const cv::Mat& image) const;
     bool startCamera(int index, std::string& message);
     InputResult nextFrame();
     void stopCamera();
