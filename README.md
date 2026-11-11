@@ -394,7 +394,7 @@ The full history is in [`documentation/Decisions.md`](documentation/Decisions.md
 
 - [`documentation/Decisions.md`](documentation/Decisions.md): project decision log
 - [`documentation/increment1_meetingnotes.md`](documentation/increment1_meetingnotes.md): meeting notes and action items
-- [`documentation/backend-class-diagram.png`](documentation/backend-class-diagram.png): UML class diagram of the backend classes
+- [`documentation/backend-class-diagram.png`](documentation/UML-diagram.png): UML class diagram of the backend classes
 - [`documentation/usecase_diagram.png`](documentation/usecase_diagram.png): use case diagram (an early Increment 1 version; it may not reflect later changes to ownership and libraries)
 
 ---
