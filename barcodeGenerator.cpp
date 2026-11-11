@@ -40,8 +40,6 @@ string getCode128Pattern(int value) {
 }
 
 // 1. Input Validation: Check 6 digits and first digit != '0'
-// this is a duplicate function
-// come back to this later
 bool isValid6DigitInput(const string& s) {
     return s.size() == 6 &&
         s[0] != '0' &&
