@@ -82,10 +82,41 @@ void displayText(cv::Mat& image, const string& value, const cv::Rect& area)
 
 
 //       Create the complete image
-
-cv::Mat codedString2Image(const string& codedStr,  const string& value,  bool showText)
+cv::Mat codedString2Image(const string& codedStr,const string& value,bool showText)
 {
-    //  Calculate dimensions. Quiet zones are already inside the pattern.
+    // 1. Validate coded string length
+    if ((int)(codedStr.size()) != CODED_STRING_LENGTH)
+        return cv::Mat();
+
+    // 2. Validate binary characters
+    for (int i = 0; i < CODED_STRING_LENGTH; i++)
+    {
+        if (codedStr[i] != '0' && codedStr[i] != '1')
+            return cv::Mat();
+    }
+
+    // 3. Validate leading and trailing quiet zones
+    for (int i = 0; i < QUIET_MODULES; i++)
+    {
+        if (codedStr[i] != '0' ||
+            codedStr[CODED_STRING_LENGTH - 1 - i] != '0')
+            return cv::Mat();
+    }
+
+    // 4. Validate human-readable value if text is enabled
+    if (showText)
+    {
+        if ((int)(value.size()) != 6)
+            return cv::Mat();
+
+        for (int i = 0; i < 6; i++)
+        {
+            if (value[i] < '0' || value[i] > '9')
+                return cv::Mat();
+        }
+    }
+
+    // 5. Calculate dimensions
     const int width = (int)(codedStr.size()) * MODULE_WIDTH;
 
     int textHeight = 0;
@@ -108,7 +139,7 @@ cv::Mat codedString2Image(const string& codedStr,  const string& value,  bool sh
     if (showText)
         height += TEXT_GAP + textHeight;
 
-    //  Allocate and fill image with white
+    // 6. Allocate and fill image with white
     cv::Mat image(
         height,
         width,
@@ -116,10 +147,10 @@ cv::Mat codedString2Image(const string& codedStr,  const string& value,  bool sh
         cv::Scalar(255, 255, 255)
     );
 
-    //  Draw barcode
+    // 7. Draw barcode
     drawBarcode(image, codedStr, 0, TOP_MARGIN);
 
-    //  Optional label centred under the bars
+    // 8. Optional label centred under the bars
     if (showText)
     {
         cv::Rect textArea(
@@ -134,7 +165,6 @@ cv::Mat codedString2Image(const string& codedStr,  const string& value,  bool sh
 
     return image;
 }
-
 
 //   Convert OpenCV Mat to Qt QImage
 

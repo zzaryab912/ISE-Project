@@ -1,7 +1,7 @@
 #ifndef BARCODEPLOTTER_H
 #define BARCODEPLOTTER_H
 
-#include <opencv2/opencv.hpp>
+#include <opencv2/core.hpp>
 #include <QImage>
 #include <string>
 
@@ -27,7 +27,7 @@ void drawBarcode(cv::Mat& image, const string& codedStr, int x, int y);
 
 void displayText(cv::Mat& image,const string& value,const cv::Rect& area);
 
-cv::Mat codedString2Image(const string& codedStr,const string& value,bool showText);
+cv::Mat codedString2Image(const string& codedStr,const string& value,bool showText=true);
 
 // Convert OpenCV Mat to Qt QImage
 QImage mat2QImage(const cv::Mat& mat);
