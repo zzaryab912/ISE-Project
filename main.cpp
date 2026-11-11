@@ -48,8 +48,8 @@ constexpr int kContentHeight = 574;
 constexpr int kBrandWidth = 566;
 
 const QString kInk = QStringLiteral("#18245c");
-const QString kBody = QStringLiteral("#20305b");
-const QString kMuted = QStringLiteral("#53627e");
+const QString kBody = QStringLiteral("#585858");
+const QString kMuted = QStringLiteral("#7c7c7c");
 const QString kBorder = QStringLiteral("#d1d1d1");
 
 QString systemFontFamily()
@@ -91,18 +91,6 @@ QString assetPath(const QString &name)
         }
     }
     return {};
-}
-
-QPixmap svgPixmap(const QString &name, const QSize &size)
-{
-    QPixmap pixmap(size);
-    pixmap.fill(Qt::transparent);
-    QSvgRenderer renderer(assetPath(name));
-    if (renderer.isValid()) {
-        QPainter painter(&pixmap);
-        renderer.render(&painter);
-    }
-    return pixmap;
 }
 
 bool isValidGuiInput(const QString &input)
@@ -182,7 +170,9 @@ QLabel *makeTextLabel(QWidget *parent, const QString &text, const QRect &geometr
 }
 
 QPushButton *makeOptionCard(QWidget *parent, const QString &title,
-                            const QString &description, const QRect &geometry)
+                            const QString &description, const QRect &geometry,
+                            const QString &titleColor = kBody,
+                            const QString &descriptionColor = kMuted)
 {
     auto *button = new QPushButton(parent);
     button->setGeometry(geometry);
@@ -195,9 +185,9 @@ QPushButton *makeOptionCard(QWidget *parent, const QString &title,
         "QPushButton:pressed { background: #f4f4f4; }"
         "QPushButton:focus { border-color: #929292; }"));
     auto *titleLabel = makeTextLabel(button, title, QRect(21, 20, 434, 27),
-                                     16, QFont::Medium, kBody);
+                                     16, QFont::Medium, titleColor);
     auto *descriptionLabel = makeTextLabel(button, description, QRect(21, 42, 434, 24),
-                                           13, QFont::Medium, kMuted);
+                                           13, QFont::Medium, descriptionColor);
     titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     descriptionLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     return button;
@@ -367,7 +357,7 @@ private:
         auto *scan = makeOptionCard(
             homePage_, QStringLiteral("Scan a barcode"),
             QStringLiteral("Read a barcode by uploading an image or scanning with camera"),
-            QRect(45, 270, 476, 80));
+            QRect(45, 270, 476, 80), QStringLiteral("#4e4e4e"), QStringLiteral("#7d7d7d"));
 
         connect(generate, &QPushButton::clicked, this, [this] { navigate(Page::Generate); });
         connect(scan, &QPushButton::clicked, this, [this] { navigate(Page::ScanChoice); });
@@ -378,7 +368,7 @@ private:
         auto *back = new QPushButton(page);
         back->setGeometry(33, 110, 33, 33);
         back->setCursor(Qt::PointingHandCursor);
-        back->setIcon(QIcon(svgPixmap(QStringLiteral("chevron-left.svg"), QSize(33, 33))));
+        back->setIcon(QIcon(assetPath(QStringLiteral("chevron-left.svg"))));
         back->setIconSize(QSize(33, 33));
         back->setStyleSheet("QPushButton { background: transparent; border: 0; padding: 0; }");
         connect(back, &QPushButton::clicked, this, [this, destination] { navigate(destination); });
@@ -403,13 +393,13 @@ private:
         codeInput_->setStyleSheet(QStringLiteral(
             "QLineEdit { border: 1px solid %1; border-radius: 14px; padding: 0 18px;"
             " color: %2; font-size: 16px; background: white; }"
-            "QLineEdit:focus { border: 1px solid #929292; }").arg(kBorder, kBody));
+            "QLineEdit:focus { border: 1px solid #929292; }").arg(kBorder, QStringLiteral("#111111")));
 
         generateButton_ = new QPushButton(generatePage_);
         generateButton_->setGeometry(526, 233, 24, 24);
         generateButton_->setCursor(Qt::PointingHandCursor);
         generateButton_->setAccessibleName(QStringLiteral("Generate barcode"));
-        generateButton_->setIcon(QIcon(svgPixmap(QStringLiteral("arrow-right.svg"), QSize(24, 24))));
+        generateButton_->setIcon(QIcon(assetPath(QStringLiteral("arrow-right.svg"))));
         generateButton_->setIconSize(QSize(24, 24));
         generateButton_->setStyleSheet("QPushButton { border: 0; background: transparent; padding: 0; }");
 
@@ -462,16 +452,17 @@ private:
         makeHeading(QStringLiteral("Upload an Image"), uploadPage_, 66, 97);
 
         uploadArea_ = new QFrame(uploadPage_);
+        uploadArea_->setObjectName(QStringLiteral("uploadArea"));
         uploadArea_->setGeometry(45, 184, 476, 217);
         uploadArea_->setStyleSheet(QStringLiteral(
-            "QFrame { background: #ffffff; border: 2px solid #d1d1d1;"
+            "QFrame#uploadArea { background: #ffffff; border: 2px solid #d1d1d1;"
             " border-radius: 19px; }"));
 
         uploadPrompt_ = makeTextLabel(uploadArea_, QStringLiteral("Choose an image to scan"),
-                                      QRect(24, 46, 428, 24), 16, QFont::Medium, kBody);
+                                      QRect(24, 46, 428, 24), 16, QFont::Medium, kBody, Qt::AlignCenter);
         uploadGuidance_ = makeTextLabel(uploadArea_,
                                         QStringLiteral("Select a barcode image from your device"),
-                                        QRect(24, 76, 428, 20), 13, QFont::Medium, kMuted);
+                                        QRect(24, 76, 428, 20), 13, QFont::Medium, kMuted, Qt::AlignCenter);
 
         auto *choose = makeOutlinedButton(uploadArea_, QStringLiteral("Choose image"),
                                           QRect(149, 127, 178, 42));
@@ -540,13 +531,14 @@ private:
         makeHeading(QStringLiteral("Barcode Found"), foundPage_, 66, 97);
 
         auto *resultArea = new QFrame(foundPage_);
+        resultArea->setObjectName(QStringLiteral("resultArea"));
         resultArea->setGeometry(45, 184, 476, 180);
         resultArea->setStyleSheet(QStringLiteral(
-            "QFrame { background: #ffffff; border: 2px solid #d1d1d1;"
+            "QFrame#resultArea { background: #ffffff; border: 2px solid #d1d1d1;"
             " border-radius: 19px; }"));
 
         makeTextLabel(resultArea, QStringLiteral("Barcode successfully read"),
-                      QRect(24, 26, 428, 24), 16, QFont::Medium, kBody);
+                      QRect(24, 26, 428, 24), 16, QFont::Medium, kBody, Qt::AlignCenter);
 
         foundCode_ = new QLabel(foundPage_);
         foundCode_->setGeometry(69, 251, 428, 75);
@@ -631,7 +623,7 @@ private:
         generatedImage_ = image;
         generatedCode_ = input;
         const QPixmap preview = QPixmap::fromImage(generatedImage_).scaled(
-            generatedPreview_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            generatedPreview_->size(), Qt::KeepAspectRatio, Qt::FastTransformation);
         generatedPreview_->setPixmap(preview);
         emptyPreview_->hide();
         generationStatus_->clear();
