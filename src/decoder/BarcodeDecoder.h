@@ -1,7 +1,7 @@
 #ifndef BARCODE_DECODER_H
 #define BARCODE_DECODER_H
 
-#include "../shared/ReaderContracts.h"
+#include "ReaderContracts.h"
 #include <opencv2/core/mat.hpp>
 #include <string>
 #include <vector>

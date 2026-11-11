@@ -1,5 +1,5 @@
 #include "BarcodeDecoder.h"
-#include "../generator/barcodeGenerator.h"
+#include "../../barcodeGenerator.h"
 
 #include <algorithm>
 #include <cmath>
