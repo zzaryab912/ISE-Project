@@ -184,9 +184,9 @@ QPushButton *makeOptionCard(QWidget *parent, const QString &title,
         "QPushButton:hover { background: #fafafa; border-color: #bdbdbd; }"
         "QPushButton:pressed { background: #f4f4f4; }"
         "QPushButton:focus { border-color: #929292; }"));
-    auto *titleLabel = makeTextLabel(button, title, QRect(21, 20, 434, 27),
+    auto *titleLabel = makeTextLabel(button, title, QRect(21, 17, 434, 27),
                                      16, QFont::Medium, titleColor);
-    auto *descriptionLabel = makeTextLabel(button, description, QRect(21, 42, 434, 24),
+    auto *descriptionLabel = makeTextLabel(button, description, QRect(21, 39, 434, 24),
                                            13, QFont::Medium, descriptionColor);
     titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     descriptionLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
@@ -455,8 +455,7 @@ private:
         uploadArea_->setObjectName(QStringLiteral("uploadArea"));
         uploadArea_->setGeometry(45, 184, 476, 217);
         uploadArea_->setStyleSheet(QStringLiteral(
-            "QFrame#uploadArea { background: #ffffff; border: 2px solid #d1d1d1;"
-            " border-radius: 19px; }"));
+            "QFrame#uploadArea { background: #ffffff; border: none; }"));
 
         uploadPrompt_ = makeTextLabel(uploadArea_, QStringLiteral("Choose an image to scan"),
                                       QRect(24, 46, 428, 24), 16, QFont::Medium, kBody, Qt::AlignCenter);
