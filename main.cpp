@@ -148,15 +148,15 @@ void uploadAndDecode(ImageSource &source, const BarcodeDecoder &decoder,
         parent, "Open barcode image", "", "Images (*.png *.jpg *.jpeg)");
 
     if (path.isEmpty()) {
-        return;
+        return;                                                                         // return no path if none is selected by the user
     }
 
-    InputResult input = source.loadFile(path);
-    DecodeResult result = decodePreparedInput(input, decoder);
-
-    if (result.found) {
-        status->setText("Decoded barcode: " + QString::fromStdString(result.code));
-    } else {
+    InputResult input = source.loadFile(path);                                          // passed to person 4, returns inputResult
+    DecodeResult result = decodePreparedInput(input, decoder);                          // checks status returned by person 4, if ready it is passed to person 5
+                                                                                        // DecodedResult contains found, message, and code
+    if (result.found) {    // found is a bool contained by the result object
+        status->setText("Decoded barcode: " + QString::fromStdString(result.code));     // result contains the decoded code if code was present. the bool is checked
+    } else {                                                                            // string text (code) is converted to qstring in order to be able to display it
         status->setText(QString::fromStdString(result.message));
     }
 }
@@ -264,7 +264,7 @@ int main(int argc, char *argv[])
         uploadAndDecode(source, decoder, &window, status);
     });
 
-    QObject::connect(startButton, &QPushButton::clicked, &window,
+    QObject::connect(startButton, &QPushButton::clicked, &window,                   // when user clicks camera button, request person 4's component to open it
                      [=, &source, &cameraTimer]() {
         string message;
         if (!source.startCamera(0, message)) {
@@ -275,7 +275,7 @@ int main(int argc, char *argv[])
         status->setText("Scanning...");
         startButton->setEnabled(false);
         stopButton->setEnabled(true);
-        cameraTimer.start(200);
+        cameraTimer.start(200);                                                     // if camera opens successfully, a 200ms timer is started for each frame
     });
 
     QObject::connect(stopButton, &QPushButton::clicked, &window,
@@ -287,11 +287,11 @@ int main(int argc, char *argv[])
         status->setText("Camera stopped.");
     });
 
-    QObject::connect(&cameraTimer, &QTimer::timeout, &window,
+    QObject::connect(&cameraTimer, &QTimer::timeout, &window,                                   // runs automatically when the timer starts
                      [=, &source, &decoder, &cameraTimer]() {
-        InputResult input = source.nextFrame();
+        InputResult input = source.nextFrame();                                                 // asks person 4's imageSource for a camera frame and preparation result, comes back as inputResult
 
-        if (!input.preview.empty()) {
+        if (!input.preview.empty()) {                                                           // if a preview was suppolied, convert openCV image itno a qt image
             QImage frame(input.preview.data, input.preview.cols, input.preview.rows,
                          static_cast<int>(input.preview.step), QImage::Format_BGR888);
             preview->setPixmap(QPixmap::fromImage(frame.copy()));
@@ -304,15 +304,15 @@ int main(int argc, char *argv[])
             startButton->setEnabled(true);
             stopButton->setEnabled(false);
             status->setText(QString::fromStdString(input.message));
-            return;
-        }
+            return;                                                                             // stop if theres an error
+        }                                                                                       // stop timer and camera, enable start and disable stop buttons, display message
 
-        if (input.status == ImageStatus::MultipleCandidates) {
+        if (input.status == ImageStatus::MultipleCandidates) {                                  // message if multiple barcodes scanned at once
             status->setText("Please scan only one barcode at a time.");
             return;
         }
 
-        if (input.status != ImageStatus::Ready) {
+        if (input.status != ImageStatus::Ready) {                                               // return, timer continues working
             return;
         }
 
@@ -322,7 +322,7 @@ int main(int argc, char *argv[])
             source.stopCamera();
             startButton->setEnabled(true);
             stopButton->setEnabled(false);
-            status->setText("Decoded barcode: " + QString::fromStdString(result.code));
+            status->setText("Decoded barcode: " + QString::fromStdString(result.code));         // if result is actually found, stop camera display code
         }
     });
 
