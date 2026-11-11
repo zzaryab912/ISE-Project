@@ -1,37 +1,25 @@
 #include "BarcodePlotter.h"
 
-#include <QFont>
-#include <QFontMetrics>
-//-------------------------------------------------------------------
+#include <opencv2/imgproc.hpp>
 
 
-static QFont labelFont()
-{
-    QFont font;
-    font.setPixelSize(FONT_SIZE);
-    return font;
-}
-
-// ---------------------------------------------------------------------------
 // Draw barcode modules
-// ---------------------------------------------------------------------------
-void drawBarcode(QPainter& painter, const string& codedStr, int x, int y)
-{
 
-    QPaintDevice* dev = painter.device();
-    const int totalWidth = (int)(codedStr.size()) * MODULE_WIDTH;
-    if (!dev || x < 0 || y < 0 ||
-        x + totalWidth > dev->width() ||
-        y + BARCODE_HEIGHT > dev->height())
+void drawBarcode(cv::Mat& image, const string& codedStr, int x, int y)
+{
+    if (image.empty())
         return;
 
-    painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(Qt::black);
+    const int totalWidth = (int)(codedStr.size()) * MODULE_WIDTH;
 
-    const size_t n = codedStr.size();
-    size_t i = 0;
+    if (x < 0 || y < 0 ||
+        x + totalWidth > image.cols ||
+        y + BARCODE_HEIGHT > image.rows)
+        return;
+
+    int i = 0;
+    const int n = (int)(codedStr.size());
+
     while (i < n)
     {
         if (codedStr[i] != '1')
@@ -41,79 +29,157 @@ void drawBarcode(QPainter& painter, const string& codedStr, int x, int y)
         }
 
         // Merge adjacent black modules into one big rectangle
-        const size_t start = i;
+        const int start = i;
+
         while (i < n && codedStr[i] == '1')
             i++;
 
-        painter.fillRect(
-            QRect(x + (int)(start) * MODULE_WIDTH,
-                  y,
-                (int)(i - start) * MODULE_WIDTH,
-                  BARCODE_HEIGHT),
-            Qt::black);
+        cv::rectangle(
+            image,
+            cv::Rect(
+                x + start * MODULE_WIDTH,
+                y,
+                (i - start) * MODULE_WIDTH,
+                BARCODE_HEIGHT
+            ),
+            cv::Scalar(0, 0, 0),
+            cv::FILLED
+        );
     }
-
-    painter.restore();
 }
 
-// ---------------------------------------------------------------------------
-//                  Draw human-readable text
-// ---------------------------------------------------------------------------
-void displayText(QPainter& painter, const QString& value, const QRect& area)
+//    Draw human-readable text
+
+void displayText(cv::Mat& image, const string& value, const cv::Rect& area)
 {
-    if (!painter.isActive() || area.isEmpty())
+    if (image.empty() || area.empty())
         return;
 
-    painter.save();
-    painter.setFont(labelFont());
-    painter.setPen(Qt::black);
-    painter.drawText(area, Qt::AlignCenter, value);
-    painter.restore();
+    int baseline = 0;
+
+    cv::Size textSize = cv::getTextSize(
+        value,
+        cv::FONT_HERSHEY_SIMPLEX,
+        FONT_SIZE,
+        1,
+        &baseline
+    );
+
+    const int textX = area.x + (area.width - textSize.width) / 2;
+    const int textY = area.y + (area.height + textSize.height - baseline) / 2;
+
+    cv::putText(
+        image,
+        value,
+        cv::Point(textX, textY),
+        cv::FONT_HERSHEY_SIMPLEX,
+        FONT_SIZE,
+        cv::Scalar(0, 0, 0),
+        1,
+        cv::LINE_AA
+    );
 }
 
-// ---------------------------------------------------------------------------
-//                  Create the complete image
-// ---------------------------------------------------------------------------
-QImage codedString2Image(const string& codedStr,
-                         const QString& value,
-                         bool showText)
+
+//       Create the complete image
+cv::Mat codedString2Image(const string& codedStr,const string& value,bool showText)
 {
+    // 1. Validate coded string length
+    if ((int)(codedStr.size()) != CODED_STRING_LENGTH)
+        return cv::Mat();
 
+    // 2. Validate binary characters
+    for (int i = 0; i < CODED_STRING_LENGTH; i++)
+    {
+        if (codedStr[i] != '0' && codedStr[i] != '1')
+            return cv::Mat();
+    }
 
-    // 1. Dimensions. Quiet zones are already inside the pattern, so the
-    //    image is exactly 121 * MODULE_WIDTH = 242 px wide (no extra margins).
+    // 3. Validate leading and trailing quiet zones
+    for (int i = 0; i < QUIET_MODULES; i++)
+    {
+        if (codedStr[i] != '0' ||
+            codedStr[CODED_STRING_LENGTH - 1 - i] != '0')
+            return cv::Mat();
+    }
+
+    // 4. Validate human-readable value if text is enabled
+    if (showText)
+    {
+        if ((int)(value.size()) != 6)
+            return cv::Mat();
+
+        for (int i = 0; i < 6; i++)
+        {
+            if (value[i] < '0' || value[i] > '9')
+                return cv::Mat();
+        }
+    }
+
+    // 5. Calculate dimensions
     const int width = (int)(codedStr.size()) * MODULE_WIDTH;
 
     int textHeight = 0;
+
     if (showText)
-        textHeight = QFontMetrics(labelFont()).height();
+    {
+        int baseline = 0;
+
+        textHeight = cv::getTextSize(
+            value,
+            cv::FONT_HERSHEY_SIMPLEX,
+            FONT_SIZE,
+            1,
+            &baseline
+        ).height + baseline;
+    }
 
     int height = TOP_MARGIN + BARCODE_HEIGHT + BOTTOM_MARGIN;
+
     if (showText)
         height += TEXT_GAP + textHeight;
 
-    // 2. Allocate + fill white
-    QImage image(width, height, QImage::Format_RGB32);
-    if (image.isNull())
-        return QImage();
-    image.fill(Qt::white);
+    // 6. Allocate and fill image with white
+    cv::Mat image(
+        height,
+        width,
+        CV_8UC3,
+        cv::Scalar(255, 255, 255)
+    );
 
-    QPainter painter(&image);
-    if (!painter.isActive())
-        return QImage();
+    // 7. Draw barcode
+    drawBarcode(image, codedStr, 0, TOP_MARGIN);
 
-    drawBarcode(painter, codedStr, 0, TOP_MARGIN);
-
-    // 3. Optional label centred under the bars
+    // 8. Optional label centred under the bars
     if (showText)
     {
-        QRect textArea(TEXT_PADDING,
-                       TOP_MARGIN + BARCODE_HEIGHT + TEXT_GAP,
-                       width - 2 * TEXT_PADDING,
-                       textHeight);
-        displayText(painter, value, textArea);
+        cv::Rect textArea(
+            TEXT_PADDING,
+            TOP_MARGIN + BARCODE_HEIGHT + TEXT_GAP,
+            width - 2 * TEXT_PADDING,
+            textHeight
+        );
+
+        displayText(image, value, textArea);
     }
 
-    painter.end();
     return image;
+}
+
+//   Convert OpenCV Mat to Qt QImage
+
+QImage mat2QImage(const cv::Mat& mat)
+{
+    if (mat.empty() || mat.type() != CV_8UC3)
+        return QImage();
+
+    QImage image(
+        mat.data,
+        mat.cols,
+        mat.rows,
+        (int)(mat.step),
+        QImage::Format_BGR888
+    );
+
+    return image.copy();
 }
