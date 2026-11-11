@@ -50,6 +50,5 @@ logs/
 tmp/
 temp/
 
-# Personal documentation
+# Local notes and scratch work
 /documentations/
-/AGENTS.md

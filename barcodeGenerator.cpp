@@ -1,7 +1,6 @@
 #include "barcodeGenerator.h"
 
 #include <algorithm>
-#include <cctype>
 
 using namespace std;
 
@@ -42,9 +41,9 @@ string getCode128Pattern(int value) {
 // 1. Input Validation: Check 6 digits and first digit != '0'
 bool isValid6DigitInput(const string& s) {
     return s.size() == 6 &&
-        s[0] != '0' &&
+        s[0] >= '1' && s[0] <= '9' &&
         all_of(s.begin(), s.end(),
-            [](unsigned char c) { return isdigit(c); });
+            [](unsigned char c) { return c >= '0' && c <= '9'; });
 }
 
 // 2. Modulo 103 Checksum Calculation
@@ -87,7 +86,7 @@ string generateBarcodeBits(const string& code6) {
 // 4. Strict Multi-Point Verification
 bool verifyEncoding(const string& code6, const string& generatedBits) {
     // Total bits check: 10 + 11 + (6 * 11) + 11 + 13 + 10 = 121 bits
-    if (generatedBits.length() != 121) {
+    if (!isValid6DigitInput(code6) || generatedBits.length() != 121) {
         return false;
     }
 

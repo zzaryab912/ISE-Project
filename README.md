@@ -18,7 +18,9 @@ cmake --build build/eyeris-ui --parallel 4
 ./build/eyeris-ui/Eyeris.app/Contents/MacOS/Eyeris
 ```
 
-Adjust the Qt and OpenCV paths for other installations. Generation and PNG saving use the existing encoder and renderer. Image preparation and camera capture in `camera-harness.cpp` are currently placeholders; those screens display the backend's status until the team's reader implementation is integrated.
+Adjust the Qt and OpenCV paths for other installations. The team-written encoder supplies Code 128 Set B bits to the OpenCV renderer; the UI converts its result to `QImage` for display and PNG saving. `camera-harness.cpp` loads PNG/JPEG files, captures camera frames and prepares grayscale candidates for the team-written decoder. Scan one barcode at a time and keep the white margins visible.
+
+Source files and the shared `ReaderContracts.h` live at the repository root. The decoder is compiled once. No barcode encoding or decoding library is used.
 
 ### Branching & Contribution
 - Keep `main` stable.

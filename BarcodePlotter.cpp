@@ -1,4 +1,5 @@
 #include "BarcodePlotter.h"
+#include "barcodeGenerator.h"
 
 #include <opencv2/imgproc.hpp>
 
@@ -106,16 +107,12 @@ cv::Mat codedString2Image(const string& codedStr,const string& value,bool showTe
     // 4. Validate human-readable value if text is enabled
     if (showText)
     {
-        if ((int)(value.size()) != 6)
+        if (!isValid6DigitInput(value) || !verifyEncoding(value, codedStr))
             return cv::Mat();
-
-        for (int i = 0; i < 6; i++)
-        {
-            if (value[i] < '0' || value[i] > '9')
-                return cv::Mat();
-        }
     }
 
+    try
+    {
     // 5. Calculate dimensions
     const int width = (int)(codedStr.size()) * MODULE_WIDTH;
 
@@ -164,6 +161,11 @@ cv::Mat codedString2Image(const string& codedStr,const string& value,bool showTe
     }
 
     return image;
+    }
+    catch (const cv::Exception&)
+    {
+        return cv::Mat();
+    }
 }
 
 //   Convert OpenCV Mat to Qt QImage
@@ -173,6 +175,8 @@ QImage mat2QImage(const cv::Mat& mat)
     if (mat.empty() || mat.type() != CV_8UC3)
         return QImage();
 
+    try
+    {
     QImage image(
         mat.data,
         mat.cols,
@@ -182,4 +186,9 @@ QImage mat2QImage(const cv::Mat& mat)
     );
 
     return image.copy();
+    }
+    catch (const cv::Exception&)
+    {
+        return QImage();
+    }
 }

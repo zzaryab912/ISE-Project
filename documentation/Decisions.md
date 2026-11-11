@@ -6,7 +6,7 @@
 - **Programming language:** C++
 - **Development model:** Incremental software development
 - **Initially recorded:** November 9, 2026
-- **Last revised:** November 10, 2026
+- **Last revised:** November 12, 2026
 - **Status:** Confirmed team decisions
 
 ## 1. Purpose
@@ -31,7 +31,7 @@ The long-term objective is a functioning retail POS application. Future function
 2. The user enters a six-digit numeric code.
 3. The application validates the input and displays an appropriate error if it is invalid.
 4. For valid input, the team-written encoder produces a Code 128 Set B pattern.
-5. Qt draws and saves the barcode image, and the application displays it.
+5. OpenCV draws the barcode image; Qt displays it and saves it as PNG.
 
 The input must contain **exactly six digits and start with a non-zero digit**, as required by the assignment. It can be stored as a string so its characters can be validated individually.
 
@@ -89,7 +89,7 @@ The application will generate Code 128 barcodes. The format supports numeric dat
 
 The team will implement barcode encoding in its own C++ code. As clarified to the team, non-standard libraries cannot be used for barcode encoding or decoding; libraries for image processing and file handling are allowed.
 
-The encoder must address input validation, Code 128 symbol representation, start and stop patterns, checksum calculation, and conversion into a barcode pattern. Qt will draw and save the image from that pattern. The encoder's internal design will be established during component design.
+The encoder must address input validation, Code 128 symbol representation, start and stop patterns, checksum calculation, and conversion into a barcode pattern. OpenCV draws the image from that pattern, and Qt displays and saves it. The encoder's internal design will be established during component design.
 
 ### DEC-005: Custom barcode decoding
 
@@ -97,13 +97,13 @@ The team will implement decoding in C++. ZXing-C++ is not permitted for decoding
 
 ### DEC-006: Desktop framework — Qt
 
-Qt will be used for barcode image rendering and saving. A simple interface is acceptable; an elaborate graphical frontend is not required. The application must still display the generated barcode.
+Qt provides the desktop interface, barcode display and PNG saving. A simple interface is acceptable; an elaborate graphical frontend is not required. The application must still display the generated barcode.
 
 OpenCV will be used for reading-side image and camera handling. The team-written encoder and decoder are responsible for translating between digits and Code 128 patterns.
 
-### DEC-018: Generated barcode images — Qt
+### DEC-018: Generated barcode images — OpenCV rendering and Qt display/saving
 
-Qt draws and saves barcode images from the pattern produced by the team's encoder. OpenCV is used separately for reading-side image and camera handling.
+During integration on November 12, the team adopted Person 3's OpenCV renderer and the requested Person 1 adapter: `codedString2Image` returns `cv::Mat`, then `mat2QImage` provides an owned Qt image for display and PNG saving. This replaces the earlier Qt drawing boundary while preserving the team-written encoder. OpenCV also handles reading-side images and camera frames.
 
 ### DEC-019: Reading responsibilities
 
@@ -172,7 +172,7 @@ The team will apply incremental development, requirements engineering, modularit
 | DEC-003 | Code 128 barcode generation | Confirmed |
 | DEC-004 | Custom barcode encoding | Confirmed |
 | DEC-005 | Team-written barcode decoding; ZXing-C++ prohibited | Confirmed |
-| DEC-006 | Qt for barcode image rendering and display; a simple interface is acceptable | Confirmed |
+| DEC-006 | Qt desktop interface, barcode display and PNG saving | Confirmed |
 | DEC-007 | Six-digit numeric input, first digit non-zero | Confirmed |
 | DEC-008 | Barcode image upload | Confirmed |
 | DEC-009 | Camera-based barcode reading | Confirmed |
@@ -184,9 +184,9 @@ The team will apply incremental development, requirements engineering, modularit
 | DEC-015 | Raw meeting notes | Confirmed |
 | DEC-016 | Consolidated technical documentation | Confirmed |
 | DEC-017 | Recording significant decisions | Confirmed |
-| DEC-018 | Qt for generated barcode images; OpenCV for reading-side image handling | Confirmed |
+| DEC-018 | OpenCV barcode rendering; Qt display/saving; OpenCV reading-side handling | Confirmed |
 | DEC-019 | Person 4 prepares images and Person 5 implements barcode decoding | Confirmed |
 
 ## 10. Document maintenance
 
-This document reflects team decisions as of November 10, 2026. The earlier ZXing decoding and Qt camera plans were superseded after clarification of the library constraint and the team's revised division of work. Future additions should distinguish confirmed decisions, revisions, superseded decisions, and unresolved matters.
+This document reflects team decisions as of November 12, 2026. The earlier ZXing decoding and Qt camera plans were superseded after clarification of the library constraint and the team's revised division of work. The November 12 integration adopts OpenCV rendering with a Qt image adapter. Future additions should distinguish confirmed decisions, revisions, superseded decisions, and unresolved matters.

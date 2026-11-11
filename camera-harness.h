@@ -6,9 +6,12 @@
 #include <opencv2/core.hpp>
 #include <opencv2/videoio.hpp>
 
+class QString;
+
 class ImageSource{
 
 public:
+    InputResult loadFile(const QString& path) const;
     InputResult loadFile(const cv::Mat& image) const;
     bool startCamera(int index, std::string& message);
     InputResult nextFrame();

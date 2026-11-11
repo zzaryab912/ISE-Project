@@ -8,7 +8,7 @@ bool saveBarcodeImage(const QImage& image, const QString& filename)
     if (image.isNull() || filename.isEmpty())
         return false;
 
-    return image.save(filename);
+    return image.save(filename, "PNG");
 }
 
 // ---------------------------------------------------------------------------

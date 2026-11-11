@@ -23,7 +23,13 @@ target_compile_definitions(Eyeris PRIVATE
 target_link_libraries(Eyeris PRIVATE Qt6::Widgets Qt6::Svg ${OpenCV_LIBS})
 
 if(APPLE)
+    file(READ "${CMAKE_ROOT}/Modules/MacOSXBundleInfo.plist.in" EYERIS_INFO_PLIST)
+    string(REPLACE "</dict>"
+        "<key>NSCameraUsageDescription</key>\n<string>Eyeris uses the camera to scan barcodes.</string>\n</dict>"
+        EYERIS_INFO_PLIST "${EYERIS_INFO_PLIST}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/EyerisInfo.plist.in" "${EYERIS_INFO_PLIST}")
     set_target_properties(Eyeris PROPERTIES
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/EyerisInfo.plist.in"
         MACOSX_BUNDLE_BUNDLE_NAME "Eyeris"
         MACOSX_BUNDLE_GUI_IDENTIFIER "edu.eyeris.barcode-studio"
         MACOSX_BUNDLE_BUNDLE_VERSION "1.0"

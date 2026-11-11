@@ -127,7 +127,11 @@ QImage generateBarcodeImage(const QString &input)
     if (bits.empty()) {
         return {};
     }
-    return codedString2Image(bits, input, true);
+    const cv::Mat image = codedString2Image(bits, input.toStdString(), true);
+    if (image.empty()) {
+        return {};
+    }
+    return mat2QImage(image);
 }
 
 QString pngSavePath(const QString &chosenPath)
@@ -678,6 +682,8 @@ private:
             return;
         }
         uploadStatus_->setText(QString::fromStdString(result.message));
+        uploadPreview_->hide();
+        uploadArea_->show();
     }
 
     void startCamera()
