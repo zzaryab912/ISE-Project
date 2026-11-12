@@ -5,14 +5,13 @@
 | **Project** | Super store inventory and sales application (C++) |
 | **Increment** | 1: Bar Code Generator and Reader |
 | **Graded demo** | 12/11/2026 |
-| **Last updated** | 08/11/2026 (after Meeting 1) |
+| **Last updated** | 10/11/2026 (after Meeting 2.5) |
 
-> **How to maintain this file:** After each meeting, (1) add a new section under [Meetings](#meetings), including that meeting's decisions, (2) update statuses and add new rows in the [Action Items](#action-items) table, and (3) change "Last updated" above.
+> **How to maintain this file:** After each meeting, (1) add a new section under [Meetings](#meetings), including that meeting's decisions, (2) update statuses and add new rows in the [Action Items](#action-items) table, (3) update the [Work Division](#work-division) table if responsibilities change, and (4) change "Last updated" above.
 
 ---
 
 ## Requirements
-
 
 | # | Requirement |
 |---|---|
@@ -26,23 +25,39 @@
 
 ---
 
+## Work Division
+
+Responsibilities as assigned after Meeting 1.
+
+| Member | Name | Area | Responsibilities |
+|---|---|---|---|
+| 1 | Zaryab | Desktop interface and integration | Own the screens, navigation and user feedback; coordinate how the pieces come together and prepare the demo. |
+| 2 | Nosher | Barcode generation logic | Validate six-digit input and create a Code 128 pattern using team-written code. Verify the encoding. |
+| 3 | Khurram | Image output and file handling | Turn the pattern into a scannable image; make it available for preview and save it to disk. Also load the selected image file for reading and handle file errors. |
+| 4 | Rayyan | Camera | Capture frames, handle camera errors and stop scanning. |
+| 5 | Rayan | Barcode decoding and build setup | Manual Barcode Decoding; return the value, format or failure. Own dependency and build setup (OpenCV). |
+
+---
+
 ## Action Items
 
 Running list. Keep completed items for the record; set their status to Done.
 
 | # | Action | Owner | Due | Status | Raised in |
 |---|---|---|---|---|---|
-| A1 | Divide work among team members | Team | After Meeting 1 | Open | 1 |
-| A2 | Prepare individual **low-level designs** | All members | Before 09/11/2026 | Open | 1 |
-| A3 | Decide between **Qt and OpenCV** for image generation | Team | Meeting 2 | Open | 1 |
+| A1 | Divide work among team members | Team | After Meeting 1 | Done | 1 |
+| A2 | Prepare individual **low-level designs** | All members | Before 09/11/2026 | Done | 1 |
+| A3 | Decide between **Qt and OpenCV** for image generation | Team | Meeting 2 | Done | 1 |
 | A4 | Create the **UML diagram**; review for overlap and interdependencies | Team | Meeting 2 | Open | 1 |
 | A5 | Begin the **coding phase** | Team | From 09/11/2026 | Open | 1 |
 | A6 | Have a working Increment 1 ready for the **graded demo** | Team | 12/11/2026 | Open | 1 |
+| A7 | **Finalize code** for each member's part | All members | 10/11/2026 (night) | Open | 2 |
+| A8 | **Integrate** all parts and **test** the application | Team | 11/11/2026 | Open | 2 |
+| A9 | Write **test cases** to verify outputs (suggested, optional) | Team | During integration and testing | Open | 2 |
 
 ---
 
 ## Meetings
-
 
 ### Meeting 1: Kickoff and Design Discussion (08/11/2026)
 
@@ -70,7 +85,7 @@ Running list. Keep completed items for the record; set their status to Done.
 - Use **Code 128** as the barcode format (consensus vote; less complexity, only 6 digits needed).
 - Implement the barcode generation logic in-house, with no external barcode-generation library.
 - Render the barcode image using **Qt or OpenCV**. **Open: to be decided.**
-- Use **ZXing-cpp** to process barcode images and return the decoded data.
+- Use **ZXing-cpp** to process barcode images and return the decoded data (superceded after meeting 2.5).
 - Use **Qt** for the front-end.
 - Implement camera scanning in addition to image upload.
 
@@ -83,6 +98,73 @@ Running list. Keep completed items for the record; set their status to Done.
 3. Finalize Qt vs OpenCV
 4. Confirm work division
 5. Begin the coding phase
+
+
+
+### Meeting 2: Interdependencies and Low-Level Designs (09/11/2026)
+
+**Agenda**
+
+1. Interdependencies between member work divisions
+2. Low-level designs
+3. Qt vs OpenCV (carried over from Meeting 1)
+4. Internal deadlines
+
+**Discussion**
+
+- **Interdependencies:** The team discussed how the work divisions depend on each other (see [Work Division](#work-division)).
+- **Low-level designs:** Members' low-level designs were discussed.
+- **Image processing library:** Qt was finalized for image processing, resolving the open Qt vs OpenCV question from Meeting 1.
+- **Internal deadlines:** Deadlines were set to make sure the parts come together before the demo (see Decisions).
+- **Next meeting:** Members' code parts should be completed by then, and the meeting will focus on integration and testing. Writing test cases to check outputs was suggested.
+
+**Decisions**
+
+- Use **Qt** for image processing (resolves the open item from Meeting 1) (superceded in meeting 2.5).
+- Internal deadlines:
+  - **10/11/2026 (night):** code finalization
+  - **11/11/2026:** integration and testing
+  - **12/11/2026:** graded demo
+
+**Action items raised:** A7 to A9 (see Action Items). A1 to A3 closed.
+
+**Next meeting (date to be confirmed) agenda**
+
+1. Review the completed code parts from each member
+2. Integrate the parts
+3. Test the application
+4. Optionally write test cases to check outputs
+
+
+
+### Meeting 2.5: Manual Encoding/Decoding Confirmation (10/11/2026)
+
+**Agenda**
+
+1. Instructor's confirmation on whether barcode encoding and decoding must be done manually
+2. Impact on library choices (ZXing-cpp, Qt vs OpenCV)
+
+**Discussion**
+
+- **Instructor confirmation:** The team confirmed with the instructor that both barcode encoding and decoding must be implemented manually.
+- **ZXing-cpp:** Since decoding must be manual, ZXing-cpp is no longer used. This supersedes the Meeting 1 decision to use ZXing-cpp for reading barcodes.
+- **Image processing library:** The change led to OpenCV being used for image processing. This supersedes the Meeting 2 decision to use Qt for image processing.
+- **Front-end:** Qt is now used only for the front end.
+
+**Decisions**
+
+- Implement both barcode encoding and decoding manually (Code 128); do not use ZXing-cpp.
+- Use **OpenCV** for image processing (supersedes the Meeting 2 decision to use Qt).
+- Use **Qt** only for the front end.
+
+**Action items raised:** None new. (A7 to A9 continue unchanged.)
+
+**Next meeting agenda**
+
+1. Review the completed code parts from each member
+2. Integrate the parts
+3. Test the application
+4. Optionally write test cases to check outputs
 
 <!--
 
