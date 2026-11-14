@@ -242,10 +242,14 @@ ISE-Project/
 │   └── chevron-left.svg       # Back button icon
 └── documentation/
     ├── Decisions.md           # Project decision log
-    ├── increment1_meetingnotes.md  # Meeting notes and action items
-    ├── usecase_diagram.png    # Use case diagram
-    ├── backend-class-diagram.png  # UML class diagram of the backend classes
-    └── backend-class-diagram.svg  # Same diagram as scalable SVG
+    ├── Increment 1/           # Increment 1 notes, requirements, and diagrams
+    │   ├── Increment 1 Requirements.md
+    │   ├── Program Flow.md
+    │   ├── increment1_meetingnotes.md
+    │   ├── UML-diagram.png
+    │   └── usecase_diagram.png
+    └── Increment 2/
+        └── Increment 2 Requirements.md
 ```
 
 ---
@@ -254,7 +258,7 @@ ISE-Project/
 
 The diagram below shows the backend classes and how they relate. The user interface (`main.cpp`) is not included. Click the image to open it full size.
 
-[![Backend class diagram](documentation/UML-diagram.png)](documentation/UML-diagram.png)
+[![Backend class diagram](documentation/Increment%201/UML-diagram.png)](documentation/Increment%201/UML-diagram.png)
 
 The sections below describe each module in detail.
 
@@ -376,7 +380,7 @@ The team's acceptance checklist for Increment 1 covers the following scenarios. 
 | GUI | **Qt 6**, used only for the front end. |
 | Qt/OpenCV bridge | A small adapter converts `cv::Mat` images to `QImage` for display and saving. |
 
-The full history is in [`documentation/Decisions.md`](documentation/Decisions.md) and [`documentation/increment1_meetingnotes.md`](documentation/increment1_meetingnotes.md).
+The full history is in [`documentation/Decisions.md`](documentation/Decisions.md) and [`documentation/Increment 1/increment1_meetingnotes.md`](documentation/Increment%201/increment1_meetingnotes.md).
 
 ---
 
@@ -393,9 +397,9 @@ The full history is in [`documentation/Decisions.md`](documentation/Decisions.md
 ## Documentation
 
 - [`documentation/Decisions.md`](documentation/Decisions.md): project decision log
-- [`documentation/increment1_meetingnotes.md`](documentation/increment1_meetingnotes.md): meeting notes and action items
-- [`documentation/backend-class-diagram.png`](documentation/UML-diagram.png): UML class diagram of the backend classes
-- [`documentation/usecase_diagram.png`](documentation/usecase_diagram.png): use case diagram (an early Increment 1 version; it may not reflect later changes to ownership and libraries)
+- [`documentation/Increment 1/increment1_meetingnotes.md`](documentation/Increment%201/increment1_meetingnotes.md): meeting notes and action items
+- [`documentation/Increment 1/UML-diagram.png`](documentation/Increment%201/UML-diagram.png): UML class diagram of the backend classes
+- [`documentation/Increment 1/usecase_diagram.png`](documentation/Increment%201/usecase_diagram.png): use case diagram (an early Increment 1 version; it may not reflect later changes to ownership and libraries)
 
 ---
 

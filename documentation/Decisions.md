@@ -190,3 +190,20 @@ The team will apply incremental development, requirements engineering, modularit
 ## 10. Document maintenance
 
 This document reflects team decisions as of November 12, 2026. The earlier ZXing decoding and Qt camera plans were superseded after clarification of the library constraint and the team's revised division of work. The November 12 integration adopts OpenCV rendering with a Qt image adapter. Future additions should distinguish confirmed decisions, revisions, superseded decisions, and unresolved matters.
+
+## 11. Increment 2
+
+### Confirmed interface direction
+
+- The point-of-sale interface will use a sidebar for Current Order, Order History and Product Catalogue. The current-order view will place the order and pricing on the left, with the camera and scanned-product details on the right.
+- Product description will appear inline in an expandable section rather than in a separate popup. The exact behavior when inspecting an existing order item remains open.
+- Keep a scanned product displayed after it leaves the camera. Repeated detections of the same barcode do not reset its details; a different barcode replaces the displayed product. Adding the entered quantity to the order resets the quantity input to zero and disables Add.
+- Current orders are in-progress while being built. Generate Bill records payment, saves the bill and sends a paid order to history; Generate Bill and Put on Hold saves a complete bill and sends an on-hold order to history. In history, Mark as Paid records payment as needed and updates the existing order and bill without changing their IDs or creating duplicates. Archive hides an archived order while retaining its records.
+
+### Open questions
+
+- The agreed design permits buying exactly the available stock; clarify the discrepancy with the assignment’s “less than” wording. File formatting for values containing spaces and multiple products in one bill record remains open.
+- Decide when stock is updated. Orders and complete bills are saved when placed on hold; detailed storage and payment interactions remain to be designed.
+- Decide when Add is re-enabled and how the quantity input behaves when switching products.
+
+See [Increment 2 Requirements](Increment%202/Increment%202%20Requirements.md) for the supplied assignment requirements.
