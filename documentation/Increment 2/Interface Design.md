@@ -1,8 +1,14 @@
 # Increment 2 Interface Design
 
-Status: working design, based on the planning discussion of 14 November 2026.
+Status: working design, updated 15 November 2026.
 
 This document records the page layouts and interactions discussed for Increment 2. It is a behavioural interface design, rather than a finished visual mock-up or an implementation specification. The [Increment 2 Requirements](Increment%202%20Requirements.md) remain the source for the assignment requirements.
+
+### Design references
+
+- The visual direction is documented in `documentations/Agents/Design System.md`, referred to in discussion as the design document. It records the approved background, sidebar, typography and panel styling. This local file is Git-ignored and is not included in the shared repository.
+- The [Increment 2 Figma design page](https://www.figma.com/design/eKMDVbIiBG4LTtJkC5r72U/Untitled?node-id=1-2) is the shared visual reference for the interface screens. The [approved Current Order frame](https://www.figma.com/design/eKMDVbIiBG4LTtJkC5r72U/Untitled?node-id=56-29) establishes their visual direction.
+- Figma screens are interface designs, not implemented application functionality.
 
 **Agreed** identifies a direction established in the discussion. **Proposed** identifies a recommendation that still needs agreement. **Open** identifies a decision that has not been settled. An assignment requirement is labelled separately where its interface has not yet been designed.
 
@@ -20,7 +26,7 @@ This document records the page layouts and interactions discussed for Increment 
 
 ### Open decisions
 
-- The exact visual styling, column widths, and minimum supported window size.
+- Minimum supported window size and smaller-screen/Windows compatibility. Visual styling and the current design proportions follow the design references above.
 - How the existing barcode generator and image reader are accessed from the expanded POS.
 - Whether an unfinished order is retained when navigating to another page. Retaining it is proposed, but the persistence behaviour has not been agreed.
 - What happens when a cashier starts a new order while another unfinished order exists.
@@ -84,11 +90,11 @@ It is still open whether selecting an existing order row can populate this same 
 
 **Agreed placement:** the existing centre order panel also serves as the bill, keeping the order and bill information on the same page. Add Bill ID (nine digits), Order ID (eight digits), a labelled customer-name text field, and payment/order status above the item list. Product rows include the product acronym and discount per unit, including zero when none applies; explicitly label unit prices as excluding tax. The listed bill fields require total tax, so a separate per-product tax column is not needed for this design.
 
-**Proposed:** show subtotal, total tax, total discount, total payable, and Generate Bill below the order list. Keep that summary accessible while the item list scrolls.
+**Agreed:** show subtotal, total tax, total discount, total payable, and the bill actions below the order list. Keeping that summary accessible while the item list scrolls remains a proposed implementation detail.
 
 For the next visual draft, the proposed subtotal label is “Subtotal (before tax & discounts)”, with line amounts clearly using that same basis, then total tax, total discount, and total payable. This clarifies the presentation without settling the tax/discount arithmetic or rounding policy. The zero-tax, zero-discount sample does not resolve those open questions.
 
-The order is in-progress while being built. **Generate Bill** for a paid sale saves a complete bill, records payment details and sends the order to history as paid. **Generate Bill and Put on Hold** also saves a complete bill and sends the order to history as on-hold. Tax/discount calculation conventions and detailed payment input flow remain open.
+The order is in-progress while being built. **Generate Bill** for a paid sale saves a complete bill, records payment details and sends the order to history as paid. **Generate Bill and Put on Hold** also saves a complete bill and sends the order to history as on-hold. The held bill can later be marked paid from Order History, using the same order and bill records. This status workflow is agreed; tax/discount calculation conventions remain open.
 
 ### States still to design
 
@@ -111,11 +117,16 @@ Inline feedback is proposed for these states; exact messages and recovery contro
 
 The assignment requires storing customer name, optional contact, payment amount, payment mode (`cash`, `card`, or `wallet`), and payment merchant name. It also requires an order status.
 
-**Agreed:** customer name is entered through a labelled text field in the existing centre order/bill panel. Its validation and the transition from editable order entry to a generated bill remain open.
+**Agreed:** customer name is entered through a labelled text field in the existing centre order/bill panel.
 
-The remaining customer/payment controls have not yet been designed. An inline section or an in-page checkout step is proposed for them. A separate sidebar page has not been agreed.
+### Agreed payment workflow
 
-Open decisions include when these fields are entered, which merchant fields apply to each payment mode, payment validation, and the detailed interaction for entering payment information. Recording a payment mode does not establish a requirement for integration with a bank or wallet service.
+- **Generate Bill and Put on Hold** creates and saves the complete bill and order with **on-hold** status, making them available in Order History before payment.
+- In Order History (also referred to as Recent Orders), the cashier selects the held order, records payment information as needed and uses **Mark as Paid**.
+- Mark as Paid updates the existing order and bill to **paid**, preserving their Order ID and Bill ID without creating duplicates. Product, quantity and pricing details remain read-only.
+- The existing **Generate Bill** action supports an already-paid sale, recording payment and saving the bill and order as paid.
+
+The Order History Figma draft includes inline payment fields and Mark as Paid. The remaining Current Order payment controls still need to be placed in its visual draft; that does not reopen the agreed workflow or require a separate payment page. Error handling on input and the detailed field mechanics remain implementation work. Recording a payment mode does not establish a requirement for integration with a bank or wallet service.
 
 ## 5. Bill View
 
@@ -138,7 +149,7 @@ The navigation placement of the existing generator and image reader remains open
 ## 7. Decisions Needed Before Implementation
 
 - Resolve the remaining quantity behaviour and catalogue editing and deletion details.
-- Define detailed payment input and confirmation interactions within the agreed paid and on-hold workflow.
+- Finish the Current Order payment-control layout and detailed field mechanics within the agreed paid and on-hold workflow.
 - Clarify the discrepancy between the agreed stock equality behavior and the assignment wording; decide stock update timing and handling of weight-based quantities.
 - Agree tax/discount arithmetic and monetary rounding.
 - Define the multi-product `Bill.txt` format and handling of spaces in saved values. The previously discussed repeated product-field groups are a proposal only.
