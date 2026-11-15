@@ -34,7 +34,10 @@ Running list. Keep completed items for the record; set their status to Done.
 | A1 | **Revise the implementation plan** to correct the mistakes pointed out and include members' thoughts from Meeting 1 | Team | 16/11/2026 (mini-meeting) | Open | 1 |
 | A2 | **Start the coding phase** | All members | After the 16/11/2026 mini-meeting | Open | 1 |
 | A3 | **Document each member's own part of the code** (separate document, code comments, or a mix of both) | All members | During coding phase | Open | 1 |
-| A4 | Push **completed functions** to the **"increment 2" branch**; keep incomplete code in **own separate branches** | All members | During coding phase | Open | 1 |
+| A4 | Push **completed, compilable code** to the **"increment 2" branch**; keep incomplete code in **own separate branches** | All members | During coding phase | Open | 1 |
+| A5 | Create **common header files** for **POS types** and **service declarations** on the **common branch** | Team | To be confirmed | Open | 1 |
+| A6 | Create **UML use case diagrams** (suggested, optional) | Team | To be confirmed | Open | 1 |
+| A7 | **Record and organize meeting notes** | Rayyan | After each meeting | Open | 1 |
 
 ---
 
@@ -57,13 +60,15 @@ Running list. Keep completed items for the record; set their status to Done.
 **Discussion**
 
 - **Work division:** Tasks were divided into five areas: interface, product service, storage, cart/pricing/scanning, and checkout and history (see [Work Division](#work-division)).
+- **POS features:** Features discussed included **barcode scanning**, **product catalogues**, **tax calculations** and **order management**. The system needs to track active order statuses, customer payment information and item stock quantities.
 - **Shared members and functions:** The common data members and functions to be used by multiple members were discussed so that interdependencies can be accounted for in the planning phase.
 - **Implementation plan:** A detailed implementation plan was presented, covering each member's assigned work and the rough program flow.
 - **User interface:** The UI is to be majorly revamped compared to Increment 1.
-- **SE principles:** The SE principles, and how to incorporate them into Increment 2, were discussed in detail.
+- **SE principles:** The SE principles, and how to incorporate them into Increment 2, were discussed in detail. **UML use case diagrams** and a clear **separation of concerns** were recommended.
 - **Documentation:** Special emphasis was placed on each member documenting their own part of the code, either in a separate document or in code comments. A mixture of both can be expected, as both are allowed.
-- **GitHub merging:** Merging was discussed in depth, reflecting on the difficulties faced when merging in Increment 1, to improve integration in Increment 2.
+- **GitHub merging:** Merging was discussed in depth, reflecting on the difficulties faced when merging in Increment 1, to improve integration in Increment 2. Code is pushed to the increment branch once it **compiles successfully**.
 - **File handling:** File handling intricacies were discussed, since most of the file handling falls under one member's area (Storage).
+- **Data formatting:** Enclosing text fields in **quotation marks** inside Product.txt was explored so that fields containing spaces display properly.
 - **Next steps:** A mini-meeting is expected on 16/11/2026 to finalize the implementation plan, revised for the mistakes pointed out and the members' thoughts from this meeting.
 
 **Decisions**
@@ -71,16 +76,19 @@ Running list. Keep completed items for the record; set their status to Done.
 - Work is divided as recorded in the **Work Division** table.
 - The **UI** will be **majorly revamped** compared to Increment 1.
 - Each member **documents their own part** of the code, through a separate document, code comments, or a mix of both.
-- **Completed functions** are pushed to the **"increment 2" branch**; **incomplete code** is kept in each member's **own separate branch**.
+- **Completed functions** are pushed to the **"increment 2" branch** once the code **compiles successfully**; **incomplete code** is kept in each member's **own separate branch**.
+- Create **common headers** for POS types and service declarations on the **common branch**.
 - Hold a **mini-meeting on 16/11/2026** to finalize the implementation plan. The **coding phase starts after** that meeting.
 
-**Action items raised:** A1 to A4 (see Action Items).
+**Action items raised:** A1 to A7 (see Action Items).
 
 **Next meeting (16/11/2026) agenda**
 
 1. Review the final implementation plan, revised for the mistakes pointed out in Meeting 1
 2. Incorporate members' thoughts on the plan
-3. Start the coding phase
+3. Decide whether to quote text fields in Product.txt
+4. Decide the file naming convention
+5. Start the coding phase
 
 <!--
 
