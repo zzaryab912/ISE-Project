@@ -105,9 +105,9 @@ struct SaleLine {                   // saleline is one purchased product.
 };
 
 struct SaleRecord {
-    Customer customer {};
     SaleIds ids {};                                 // has an orderId and a billId
     Timestamp timestamp {};                         // every sale needs a timestamp
+    Customer customer {};
     Payment payment {};
     OrderStatus status = OrderStatus::InProgress;
     vector<SaleLine> lines {};                      // helps accommodate lots of SaleLines (purchased products) 
