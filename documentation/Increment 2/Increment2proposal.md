@@ -60,7 +60,7 @@ These are the implementation conventions used throughout this proposal. Money in
 
 | Record         | Data members with exact C++ types                                                                                                                                                                               |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **CartItem**   | `Product product`; `std::int64_t quantity`. Product is copied when added.                                                                                                                                       |
+| **CartItem**   | `Product product`; `std::int64_t quantity`. Copy Product on first addition to the row; retain its captured unit and pricing when the catalogue changes. Stock is checked against the live catalogue. |
 | **Totals**     | `std::int64_t subtotal`; `std::int64_t tax`; `std::int64_t discount`; `std::int64_t payable`. All in paisa.                                                                                                     |
 | **Customer**   | `std::string name`; `std::string contact`. Contact may be empty.                                                                                                                                                |
 | **Payment**    | `bool recorded`; `std::int64_t amount`; `PaymentMode mode`; `std::string merchant`. Amount is paisa; held orders have recorded=false.                                                                           |
@@ -85,7 +85,7 @@ These methods are `const` member functions; all other ordinary methods in the fu
 | BarcodeAssetService | preview, save |
 | IPosStore / PosStorage | read |
 | IdGenerator | productId, saleIds |
-| CartService | items, totals |
+| CartService | items, totals, lineTotals |
 | PricingCalculator | calculate |
 | HistoryService | list, get |
 
@@ -142,8 +142,8 @@ Functions with no parameters read the appropriate fields from the page.
 | Function | Parameters in order — exact C++ types | What it does | Return type |
 | --- | --- | --- | --- |
 | PosWindow — constructor | `ProductService& products`; `BarcodeAssetService& images`; `CartService& cart`; `PosScanner& scanner`; `CheckoutService& checkout`; `HistoryService& history`; `QWidget* parent` (default `nullptr`) | Store service references and create parent-owned page widgets. | No return type — constructor. |
-| onCameraTick | None | Call scanner poll, display preview, and look up a changed barcode. Repeated readings leave quantity untouched. | `void` |
-| onAddClicked | None | Pass barcode and quantity to cart addByBarcode. Refresh items/totals; successful add resets input to zero and disables Add. | `void` |
+| onCameraTick | None | Keep displaying the live preview and look up a changed barcode. No detection or a repeated product leaves the selection/quantity untouched and does not stop the camera. | `void` |
+| onAddClicked | None | Pass barcode and quantity to cart addByBarcode. On success refresh items/totals, reset input to zero and disable Add; on failure show its message inline and keep the cart/input unchanged. | `void` |
 | onCartQuantityChanged | `const std::string& productId`; `std::int64_t quantity` | Set the absolute row quantity through the cart. Zero removes it. | `void` |
 | onGenerateBillClicked | None | Generate/save a Paid bill, then open Order History with that order selected. | `void` |
 | onGenerateAndHoldClicked | None | Generate/save an OnHold bill with unrecorded payment, then open Order History with that order selected. | `void` |
@@ -155,10 +155,10 @@ Functions with no parameters read the appropriate fields from the page.
 | onSaveProduct | None | Send completed Product to create. | `void` |
 | onUpdateProduct | None | Send original Product and edited replacement to update. | `void` |
 | onDeleteProduct | None | Pass selected product ID to remove. | `void` |
-| showPage | `const std::string& pageName` | Switch sidebar page. | `void` |
+| showPage | `const std::string& pageName` | Switch sidebar page; start the camera/timer on entering Current Order and stop them on leaving it. | `void` |
 | showCatalogueTab | `const std::string& tabName` | Switch View Catalogue/Add Product tab. | `void` |
 
-Keep Description inline below quantity controls and Add anchored below it. Current Order has two bill buttons: **Generate Bill** saves the order as Paid; **Generate Bill and Put on Hold** saves it as OnHold. Both generate the complete bill and send the cashier to Order History with the saved order selected and its bill visible. Disable both buttons while saving. Read current cart items when a button is handled and clear only after success; failure keeps the cart available. Stop scanning when leaving its page or closing the app. No animations or bill popup are needed.
+Keep Description inline below quantity controls and Add anchored below it. Current Order has two bill buttons: **Generate Bill** saves the order as Paid; **Generate Bill and Put on Hold** saves it as OnHold. Both generate the complete bill and send the cashier to Order History with the saved order selected and its bill visible. Disable both buttons while saving. Read current cart items when a button is handled and clear only after success; failure keeps the cart available. **Keep the camera running for the entire time Current Order is open**, including waiting for a barcode, entering quantities, adding items and correcting input. Start it when the page first opens or is revisited; normal scan/add outcomes never stop it. Stop on leaving the page or closing the app; an actual camera/processing failure is reported inline. No animations or bill popup are needed.
 
 ## 4. P2 — Nosher: products and inventory
 
@@ -184,7 +184,7 @@ Keep Description inline below quantity controls and Add anchored below it. Curre
 | hasStock | `const Product& product`; `std::int64_t requested` | Check positive, unit-valid quantity no greater than available stock. | `bool` |
 | deductStock | `std::vector<Product>& products`; `const std::vector<SaleLine>& lines` | Validate all lines, then deduct in supplied list copy. No file writes; leave copy unchanged on failure. | `Status` |
 
-Zero-stock products remain available for restocking by quantity edit. **Block deletion and measurement-unit changes while any OnHold sale references the product.** Return failure without changing data. These restrictions end when no held sale references it because those sales have been paid or archived. Other catalogue edits remain available; changing a product's price does not change an already-generated bill. Barcode and ID remain fixed after creation.
+Zero-stock products remain available for restocking by quantity edit. **Block deletion and measurement-unit changes while any OnHold sale references the product.** Return failure without changing data. These restrictions end when no held sale references it because those sales have been paid or archived. Other catalogue edits remain available; they do not rewrite existing cart rows or saved bills. Updated pricing applies to newly added rows and future orders. Barcode and ID remain fixed after creation.
 
 ### BarcodeAssetService
 
@@ -267,11 +267,20 @@ Selecting an order in History shows the contents of its saved bill, with the ord
 | Function | Parameters in order — exact C++ types | Description | Return type |
 | --- | --- | --- | --- |
 | CartService — constructor | `ProductService& products`; `const PricingCalculator& pricing` | Keep references; begin with empty items_. | No return type — constructor. |
-| addByBarcode | `const std::string& barcode`; `std::int64_t addition` | Look up/check stock; add quantity, merging existing row. Capture product/pricing on first addition. | `Status` |
-| setQuantity | `const std::string& productId`; `std::int64_t quantity` | Set absolute quantity after stock check. Zero removes row, including deleted catalogue products. | `Status` |
+| addByBarcode | `const std::string& barcode`; `std::int64_t addition` | Read live product/stock; check existing row quantity plus addition before merging. Capture unit/pricing only for a new row; retain an existing row's snapshot. | `Status` |
+| setQuantity | `const std::string& productId`; `std::int64_t quantity` | Set absolute quantity after live stock/unit checks; retain captured pricing. Zero removes the row even if the catalogue product was deleted or its unit changed. | `Status` |
 | items | None | Return cart entries by value. | `std::vector<CartItem>` |
 | totals | None | Calculate current totals. | `Result<Totals>` |
+| lineTotals | `const std::string& productId` | Find the cart row and calculate its subtotal, tax, discount and payable using the shared calculator. Return failure/message if the row does not exist. | `Result<Totals>` |
 | clear | None | Empty cart after successful bill generation. | `void` |
+
+lineTotals is a const method. Pass the matching CartItem as a one-item vector to PricingCalculator::calculate and return its result; do not duplicate the arithmetic. P1 calls lineTotals for each cart row and displays its subtotal in the Amount column, while totals supplies the whole-order summary. Both use the row's captured rates and the same rounding rules. This adds no data members or shared record types.
+
+Keep each row's captured unit, unit price, tax per unit and discount per unit fixed. Later catalogue price edits do not reprice that row or prevent billing it. Repeat additions merge into the same row using its captured rates; a product not yet in the cart uses the current catalogue values when first added. Available stock is always checked live, rather than taken from the stored Product copy.
+
+For addByBarcode, **required quantity = quantity already in the row + addition**. P4 passes that combined quantity to P2's stock check. If it exceeds current stock, return failure without changing the row or totals. Example Status message: **"Insufficient stock: 4 already in order + 2 requested exceeds 5 available."** P1 displays the warning inline and keeps the entered quantity available for correction. Format quantities in their displayed units, not the internal thousandths.
+
+If a live product's Count/Weight unit differs from the captured cart unit, positive quantity changes and bill generation fail without altering the snapshot. Warning: **"Product measurement unit has changed. Restore the original unit or remove this item from the order."** Zero still removes the row. Never reinterpret an existing quantity as another unit. Saved and held bills remain unchanged; held-product unit edits are already blocked by P2.
 
 ### PricingCalculator
 
@@ -296,11 +305,13 @@ Calculation rule: for each line, multiply each paisa-per-unit rate by integer qu
 | --- | --- | --- | --- |
 | PosScanner — constructor | `ImageSource& source`; `const BarcodeDecoder& decoder` | Keep references; initialise running_ false and lastCode_ empty. | No return type — constructor. |
 | ~PosScanner — destructor | None | Call stop before destruction. | No return type — destructor. |
-| start | `int cameraIndex` | Start shared camera source. | `Status` |
-| poll | None | Read/decode frame; return preview and changed-code flag. No candidate/repeat keeps selection. | `Result<ScanResult>` |
+| start | `int cameraIndex` | Start shared camera source for the Current Order session; reset lastCode_ for a new session. | `Status` |
+| poll | None | Read/decode without stopping on normal scan outcomes. Valid frames return success and preview, including frames without a readable barcode. | `Result<ScanResult>` |
 | stop | None | Stop/release camera; safe to repeat. | `void` |
 
-Keep scanning after success: the existing Increment 1 window currently stops and shows a result page. P1 supplies the only timer and verifies a changed code through P2 lookup. Multiple candidates give guidance; unsuccessful decode results have found=false and empty code. Camera failure returns a message and stops scanning.
+P1 supplies the only polling timer and keeps it active while Current Order is open. Unlike the Increment 1 result screen, successful decoding does not stop the camera. P1 replaces the selection only for a different recognised product; repeated readings leave its entered quantity untouched.
+
+For a valid frame with no readable barcode or multiple candidates, return success=true with the preview, decoded.found=false, empty decoded.code and codeChanged=false. Guidance may be returned in the result message. Keep the camera running and leave lastCode_ unchanged so removing/re-presenting the same barcode does not reset the selection. For a decoded code, found=true; codeChanged is true only when it differs from lastCode_, which is then updated. Camera/frame-processing failures return success=false with a message; P1 shows the error inline, and the failed session is stopped rather than reported as an ordinary no-detection frame.
 
 ## 7. P5 — Rayan Dar: bills and history
 
@@ -318,9 +329,11 @@ Keep scanning after success: the existing Increment 1 window currently stops and
 | Function | Parameters in order — exact C++ types | Description | Return type |
 | --- | --- | --- | --- |
 | CheckoutService — constructor | `IPosStore& store`; `ProductService& products`; `const PricingCalculator& pricing`; `const IdGenerator& ids` | Keep references to shared objects. | No return type — constructor. |
-| generateBill | `const std::vector<CartItem>& items`; `const Customer& customer`; `const Payment& payment`; `OrderStatus status`; `const Timestamp& timestamp` | Accept Paid/OnHold only. Validate items, stock and rates; calculate, obtain IDs, build and save order/bill; return saved record. | `Result<SaleRecord>` |
+| generateBill | `const std::vector<CartItem>& items`; `const Customer& customer`; `const Payment& payment`; `OrderStatus status`; `const Timestamp& timestamp` | Accept Paid/OnHold only. Validate captured item values and live product identity/unit/stock; calculate using captured rates, obtain IDs, save order/bill and return the saved record. | `Result<SaleRecord>` |
 
-For **Paid**, payment is recorded and stock is deducted through P2 in the same data copy saved through P3. For **OnHold**, generate/save the complete bill but do not deduct or reserve stock. Return failure if a cart's stored rates no longer match the catalogue; the cashier must refresh/re-add the changed item. Payment amount is the amount applied to the bill and must equal payable; cash tender/change handling is outside this flow.
+P1 passes an unmodified snapshot returned by CartService::items; widgets must not construct or replace product rates. Those captured rates are authoritative for this cart. P5 validates their numeric values and uses the shared calculator, but does not compare them with current catalogue prices or replace them when prices change. Validate live product IDs/barcodes, matching measurement units and sufficient current stock before saving; a deleted product, unit mismatch or insufficient stock returns failure with the cart unchanged.
+
+For **Paid**, payment is recorded and stock is deducted through P2 in the same data copy saved through P3. For **OnHold**, generate/save the complete bill but do not deduct or reserve stock. A later payment uses that saved bill's values, never current catalogue prices. Payment amount is the amount applied to the bill and must equal payable; cash tender/change handling is outside this flow.
 
 ### HistoryService
 
@@ -343,7 +356,9 @@ Marking an already-paid order with identical payment details returns success and
 
 | Situation | Caller receives / required effect |
 | --- | --- |
-| Missing product/order, invalid input, stale edited product or changed cart rates | success=false, explanatory message; Result value is ignored. No cart/business-data mutation. |
+| Missing product/order, invalid input or stale edited catalogue product | success=false, explanatory message; Result value is ignored. No cart/business-data mutation. |
+| Catalogue prices change after a cart row was added | Keep the row's captured rates and bill using them; updated prices apply to new rows. Always recheck live stock. |
+| Live product unit differs from an existing cart row's unit | success=false for positive quantity edits or billing, with the unit warning above. Keep the snapshot unchanged; zero can still remove the row. |
 | Insufficient stock at add or payment | success=false; no partial quantity changes or deduction. Held bill remains held. |
 | Delete or change the measurement unit of a product referenced by an OnHold sale | success=false; product and saved bill remain unchanged. |
 | Successful lookup of an empty catalogue/history | success=true and empty vector, not an error. |
@@ -357,7 +372,7 @@ Detailed recovery and input messages can be added later; the common success flag
 | Operation | Calls and data passed |
 | --- | --- |
 | Scan product | P1 calls P4 poll; decoded barcode goes to P2 findByBarcode; returned Product fills the right panel. |
-| Add/change quantity | P1 calls P4 addByBarcode/setQuantity; items and totals return to the order panel. |
+| Add/change quantity | P1 calls P4 addByBarcode/setQuantity, reads items, calls lineTotals with each product ID for row amounts, and calls totals for the whole-order summary. |
 | Generate paid/held bill | P1 passes cart items, customer, payment, status and timestamp to P5. P5 uses P4 calculate, P3 IDs and P2 stock rules, then P3 save. On success P1 clears the cart and opens History with the returned SaleRecord selected and displayed. |
 | Pay held bill | P1 passes order ID/payment to P5 markPaid. P5 updates stock and the existing saved records through P2/P3; no new bill IDs. |
 | Manage catalogue | P1 calls P2 product/image functions. P2 uses P3 storage/IDs and returns updated data for display. |
@@ -390,7 +405,7 @@ These are the remaining header responsibilities, not additional Big Bang prerequ
 - [ ] **BarcodeAssetService.h — Nosher (P2):** declare its constructor, preview and save, with the dataRoot_ path member from Section 4.
 - [ ] **PosStorage.h — Khurram (P3):** declare public inheritance from IPosStore, its constructor and load, plus read/save overrides. Include dataRoot_, data_ and loaded_ from Section 5.
 - [ ] **IdGenerator.h — Khurram (P3):** provide the defaulted constructor and declare productId and saleIds from Section 5; no data members.
-- [ ] **CartService.h — Rayyan (P4):** declare its constructor, addByBarcode, setQuantity, items, totals and clear. Include products_, pricing_ and items_ from Section 6.
+- [ ] **CartService.h — Rayyan (P4):** declare its constructor, addByBarcode, setQuantity, items, totals, lineTotals and clear. Include products_, pricing_ and items_ from Section 6.
 - [ ] **PricingCalculator.h — Rayyan (P4):** provide the defaulted constructor and declare calculate from Section 6; no data members.
 - [ ] **PosScanner.h — Rayyan (P4):** define ScanResult, reusing DecodeResult from ReaderContracts.h. Declare the constructor, destructor, start, poll and stop, with source_, decoder_, lastCode_ and running_ from Section 6.
 - [ ] **CheckoutService.h — Rayan Dar (P5):** declare its constructor and generateBill, with store_, products_, pricing_ and ids_ from Section 7.
