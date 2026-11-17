@@ -46,7 +46,7 @@ dist/
 logs/
 *.log
 
-# Temporary files
+# Temp files
 tmp/
 temp/
 
