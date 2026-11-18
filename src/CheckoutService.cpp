@@ -121,7 +121,7 @@ Result<vector<SaleLine>> buildSaleLines(const vector<CartItem>& items,
             return {false, "Invalid quantity or measurement unit for " + captured.acronym + ".", {}};
         }
         if (!products.hasStock(*live, item.quantity)) {
-            return {false, "Insufficient stock for " + captured.acronym + ".", {}};
+            return {false, "Requested quantity must be less than available stock for " + captured.acronym + ".", {}};
         }
 
         lines.push_back({captured.id, captured.barcode, captured.acronym,

@@ -77,7 +77,7 @@ Status validateHeldStock(const SaleRecord& sale, const vector<Product>& catalogu
             return {false, "Invalid quantity or measurement unit for " + line.acronym + "."};
         }
         if (!products.hasStock(*live, line.quantity)) {
-            return {false, "Insufficient stock for " + line.acronym + "."};
+            return {false, "Requested quantity must be less than available stock for " + line.acronym + "."};
         }
     }
 
