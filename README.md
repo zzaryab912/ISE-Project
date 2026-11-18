@@ -1,10 +1,12 @@
-# Eyeris — Barcode Studio
+# Eyeris — Retail POS System
 
-**Increment 1 of the Super Store Inventory and Sales Application (ISE course project)**
+**Increment 2 of the Super Store Inventory and Sales Application (*Introduction to Software Engineering* course project)**
 
-Eyeris is a desktop application, written in C++17, that **generates** and **reads** 6-digit **Code 128 (Set B)** barcodes. It is the first increment of a retail point-of-sale (POS) system built for the *Introduction to Software Engineering* (ISE) course.
+Eyeris is a standalone **C++17 desktop Point-of-Sale (POS) and inventory management system** powered by **Qt 6**, **OpenCV 4**, and custom, in-house **Code 128** barcode generation and continuous camera scanning.
 
-The Code 128 encoder and decoder are **written by the team from scratch**. No external barcode-generation or barcode-reading library is used. Qt provides the user interface, and OpenCV provides image rendering, loading, camera capture and image processing.
+Increment 1 built a barcode generator and reader. **Increment 2 embeds that engine into a complete, multi-page POS application:** a persistent product catalogue, live inventory tracking, camera-driven cart management, pricing / tax / discount calculation, bill generation, on-hold orders, and an order history archive.
+
+The Code 128 encoder, checksum, and decoder are **written by the team from scratch**. No external barcode library (such as ZXing or OpenCV's `BarcodeDetector`) is used. Qt provides the graphical interface, and OpenCV provides image processing, computer-vision localization, and camera streaming.
 
 ---
 
@@ -15,12 +17,12 @@ The Code 128 encoder and decoder are **written by the team from scratch**. No ex
 3. [Tech Stack](#tech-stack)
 4. [Building and Running](#building-and-running)
 5. [Using the Application](#using-the-application)
-6. [How It Works](#how-it-works)
-7. [Repository Structure](#repository-structure)
-8. [Module Reference](#module-reference)
-9. [Error Handling](#error-handling)
-10. [Testing](#testing)
-11. [Known Limitations](#known-limitations)
+6. [Architecture & System Flow](#architecture--system-flow)
+7. [Data Storage & File Formats](#data-storage--file-formats)
+8. [Repository Structure](#repository-structure)
+9. [UML Diagrams & Module Reference](#uml-diagrams--module-reference)
+10. [Error Handling](#error-handling)
+11. [Testing](#testing)
 12. [Design Decisions](#design-decisions)
 13. [Team](#team)
 14. [Documentation](#documentation)
@@ -29,30 +31,81 @@ The Code 128 encoder and decoder are **written by the team from scratch**. No ex
 
 ## Features
 
-- **Generate** a Code 128 Set B barcode from a 6-digit number, preview it on screen, and **save it to disk as a PNG** with the human-readable number printed below the bars.
-- **Upload** a PNG, JPG or JPEG image, automatically locate and straighten the barcode, and decode it back to the 6-digit number.
-- **Scan with a camera** using a live webcam preview. The app detects and straightens a barcode in the frame, then stops scanning and shows the decoded number as soon as a valid reading is found.
-- **Robust decoding:** reads upside-down (180°-rotated) barcodes and verifies every reading with a Mod-103 checksum.
-- **Honest failure reporting:** if a barcode cannot be read reliably, the app says so. It never guesses or invents digits.
+### Point of Sale and Checkout (Current Order)
+
+- **Continuous camera scanning:** the live webcam preview stays active. Items held in view are automatically detected, straightened, decoded, and matched against `Product.txt` with no manual trigger.
+- **Duplicate suppression:** holding the same item in front of the camera across many frames keeps the product visible without re-adding it or resetting the entered quantity (`codeChanged == false`).
+- **Dynamic cart management:** add fractional quantities (kg) or integer counts, adjust rows with inline `+` / `-` controls, and remove a row by reducing its quantity to `0`. Adding a product that is already in the cart merges into the existing row.
+- **Strict live stock checks:** the app verifies `(already in cart + requested) <= available stock` against live storage and shows clear inline feedback on a deficit.
+- **Captured pricing integrity:** each cart row snapshots the unit price, tax, and discount at the moment it is added. Later catalogue edits do not change the price of an item already in the cart.
+- **Unit mismatch protection:** if a product's measurement unit (`Count` vs `Weight`) is changed in the catalogue while it is in the cart, positive quantity changes and billing are blocked until the problem is resolved.
+
+### Pricing and Tax Calculation
+
+- **Exact paisa arithmetic:** every monetary amount is a 64-bit integer number of paisas (`100 paisa = PKR 1.00`). There is no floating-point money.
+- **Half-paisa rounds up:** a rate is multiplied by the quantity (stored in thousandths), divided by 1000, and rounded with `(rate * qty + 500) / 1000`.
+- **Transparent summary:** the cart shows product count, total units / kg, Subtotal (before tax and discount), Total Tax (calculated on the full quantity, before discount), Total Discount, and the final Payable amount in PKR.
+
+### Transaction Handling and Multi-File Persistence
+
+- **Two billing actions:**
+  - **Generate Bill (Paid):** validates payment (`Cash`, `Card`, or `Wallet`), deducts live stock in `Product.txt`, assigns an 8-digit Order ID and a 9-digit Bill ID, and saves the records across `Order.txt`, `OrderDetail.txt`, and `Bill.txt` with status `Paid`.
+  - **Generate Bill and Put on Hold (Unpaid):** saves the complete bill with status `OnHold`. Stock is **not** deducted or reserved, and no payment is recorded.
+- **Delimiter contract:** each record ends with `#`. String fields (IDs, barcodes, names, dates, contacts, merchants) are wrapped in double quotes using `std::quoted`, so whitespace is preserved.
+
+### Order History, Deferred Payment, and Archive
+
+- **Historical bill inspector:** lists past non-archived orders. Selecting one shows the exact bill as it was saved, with historical prices, discounts, quantities, totals, and payment status.
+- **Deferred payment (Mark as Paid):** for an `OnHold` order, enter the payment details and complete the sale. The app performs a **fresh live stock check**, deducts inventory, and updates the status to `Paid` in `Order.txt` and `Bill.txt` while **preserving the original Order ID and Bill ID**.
+- **Archive:** hides an order from the active list while all transaction records stay on disk.
+
+### Product Catalogue Management
+
+- **Catalogue browser:** a list of all products. Items with zero stock stay visible with an **Out of stock** badge.
+- **Full specifications and barcode preview:** the inspector shows product ID, barcode, acronym, name, unit, unit price, tax, discount, stock, and the generated barcode PNG with its file path.
+- **Restock and edit:** restock by updating the quantity, and change prices and details. The barcode number is fixed after creation.
+- **Referential integrity locks:** deleting a product, or changing its measurement unit, is blocked while any active `OnHold` order references it.
+- **New product creation:** the form validates a unique 6-digit Code 128 barcode, saves its PNG to `assets/`, allocates the next Product ID, and appends the record to `Product.txt`.
+
+### Reused Increment 1 Capabilities
+
+- Standalone 6-digit Code 128 barcode generator that saves a PNG.
+- Barcode reader for uploaded PNG / JPEG images.
+- Single-shot webcam barcode scan.
+
+---
 
 ## Requirements Covered
 
-| # | Requirement | Where it is implemented |
+| Requirement | Where it is implemented | Primary actor |
 |---|---|---|
-| R1 | Generate a barcode from a **6-digit number** whose first digit is **non-zero** (`100000`–`999999`) | `barcodeGenerator.cpp` (`isValid6DigitInput`, `generateBarcodeBits`) and the input field in `main.cpp` |
-| R2 | Display the barcode on screen and **save it to disk as an image** | `BarcodePlotter.cpp`, `BarcodeImageIO.cpp`, Generate page in `main.cpp` |
-| R3 | **Read** a barcode generated in R1 and show the 6-digit number | `BarcodeDecoder.cpp` and the Found page in `main.cpp` |
-| R4 | Read from an **uploaded image** or **scan through the laptop camera** | `camera-harness.cpp` (`ImageSource`), Upload and Camera pages in `main.cpp` |
-| R5 | **No external non-standard libraries to generate barcodes** | Encoder and decoder are team-written; only Qt and OpenCV are used for GUI, image processing and file handling |
+| Generate a 6-digit Code 128 Set B barcode (first digit non-zero, `100000`–`999999`) | `barcodeGenerator.cpp`, `BarcodePlotter.cpp` | Manager, Cashier |
+| Display the barcode on screen and save it as a PNG image | `BarcodePlotter.cpp`, `BarcodeImageIO.cpp` | Manager, Cashier |
+| Read a 6-digit barcode and display the number | `BarcodeDecoder.cpp` | Cashier, Manager |
+| Read from an uploaded image or the webcam | `camera-harness.cpp` (`ImageSource`) | Cashier, Manager |
+| Team-written encoder / decoder, no non-standard barcode libraries | `barcodeGenerator.cpp`, `BarcodeDecoder.cpp` | Architecture |
+| Continuous camera-based barcode reader in the POS | `PosScanner.cpp`, `camera-harness.cpp` | Cashier |
+| The entire POS application is GUI-based (Qt 6) | `PosWindow` (Qt 6 Widgets / Svg) | Cashier, Manager |
+| Display product specifications from `Product.txt` on barcode scan | `PosScanner.cpp`, `ProductService.cpp` | Cashier |
+| Manage `Product.txt` with space-separated fields, quoted strings, and a `#` end-of-line marker | `PosStorage.cpp`, `ProductService.cpp` | Manager, Storage |
+| Record the order and generate a bill with live inventory validation | `CartService.cpp`, `CheckoutService.cpp` | Cashier |
+| View the product description on scan or via the inline Description button | `CurrentOrderPage`, `ProductService.cpp` | Cashier |
+| Save orders to `Order.txt` (8-digit ID ending in the day, date, time, customer, status, payment) | `src/CheckoutService.cpp`, `PosStorage.cpp` | Cashier |
+| Save purchased products to `OrderDetail.txt` (order ID, product ID, barcode, quantity) | `src/CheckoutService.cpp`, `PosStorage.cpp` | Cashier |
+| Save the bill to `Bill.txt` (9-digit Bill ID, customer, order ID, item rates, totals, status) | `src/CheckoutService.cpp`, `PosStorage.cpp` | Cashier |
+| On-hold orders, Mark as Paid with deferred stock deduction, Archive workflow, referential deletion lock | `CheckoutService.cpp`, `HistoryService.cpp`, `ProductService.cpp` | Cashier, Manager |
+
+---
 
 ## Tech Stack
 
-| Area | Technology |
-|---|---|
-| Language | C++17 |
-| GUI | Qt 6 (`Widgets`, `Svg`) |
-| Image processing, file decoding and camera | OpenCV 4 (`core`, `imgproc`, `imgcodecs`, `videoio`) |
-| Build system | CMake 3.16 or newer |
+| Area | Technology / version | Role in the project |
+|---|---|---|
+| **Language** | C++17 | Language standard used across all modules |
+| **GUI framework** | Qt 6 (`Widgets`, `Svg`) | Desktop UI, page navigation, SVG icons, window layouts |
+| **Computer vision** | OpenCV 4 (`core`, `imgproc`, `imgcodecs`, `videoio`) | Webcam capture, thresholding, perspective warp, barcode rendering |
+| **Build system** | CMake 3.16 or newer | Cross-platform build management |
+| **Compilers** | MSVC 2022 (v143+), Apple Clang 14+, GCC 10+ | Supported toolchains |
 
 ---
 
@@ -60,313 +113,459 @@ The Code 128 encoder and decoder are **written by the team from scratch**. No ex
 
 ### Prerequisites
 
-- A C++17 compiler (Clang, GCC or MSVC)
+- A C++17 compiler (MSVC 2022, Apple Clang 14+, or GCC 10+)
 - **CMake** 3.16 or newer
 - **Qt 6** with the `Widgets` and `Svg` modules
 - **OpenCV 4** with the CMake config files installed
-- A webcam, if you want to use camera scanning
+- A webcam, for camera scanning
 
-> **OpenCV components note:** `CMakeLists.txt` currently asks for the components `core imgproc imgcodecs videoio objdetect`. The code only uses the first four. Standard OpenCV 4 installs include `objdetect`, but if CMake fails to configure because that component is missing, remove `objdetect` from the `find_package(OpenCV ...)` line.
+### Windows (Visual Studio 2022 + MSVC)
 
-### macOS (the verified build path)
+Adjust the paths to match your machine.
 
-The following commands are the ones the team used. Adjust the paths to match your machine.
+```powershell
+# 1. Configure CMake with the Qt 6 and OpenCV 4 paths:
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_PREFIX_PATH="D:/Qt/6.11.0/msvc2022_64" `
+  -DOpenCV_DIR="D:/opencv/build"
+
+# 2. Compile in Release mode:
+cmake --build build --config Release --parallel 4
+
+# 3. Deploy the Qt runtime DLLs and plugins (first time only):
+& "D:\Qt\6.11.0\msvc2022_64\bin\windeployqt.exe" --release "build\Release\Eyeris.exe"
+
+# 4. Copy the OpenCV DLL (if it is not already on your PATH):
+Copy-Item "D:\opencv\build\x64\vc16\bin\opencv_world4140.dll" "build\Release\" -Force
+
+# 5. Launch Eyeris:
+.\build\Release\Eyeris.exe
+```
+
+### macOS (Clang + Homebrew)
 
 ```sh
+# 1. Configure:
 cmake -S . -B build/eyeris-ui \
   -DCMAKE_PREFIX_PATH="$HOME/Qt/6.11.0/macos" \
   -DOpenCV_DIR=/opt/homebrew/opt/opencv@4/lib/cmake/opencv4
 
+# 2. Build:
 cmake --build build/eyeris-ui --parallel 4
 
+# 3. Run:
 ./build/eyeris-ui/Eyeris.app/Contents/MacOS/Eyeris
 ```
 
 - `CMAKE_PREFIX_PATH` should point to your Qt 6 kit (the folder that contains `lib/cmake/Qt6`).
-- `OpenCV_DIR` should point to the folder that contains `OpenCVConfig.cmake` (here, the Homebrew `opencv@4` install).
-- On macOS the build produces an app bundle. A generated `Info.plist` includes the camera usage description (*"Eyeris uses the camera to scan barcodes."*), so macOS will ask for webcam permission the first time you start camera scanning.
+- `OpenCV_DIR` should point to the folder that contains `OpenCVConfig.cmake`.
+- On macOS the build produces an app bundle, and the system asks for webcam permission the first time the camera starts.
 
-### Windows and Linux
+### Linux and other setups
 
-The same CMake project is used. Point CMake at your local Qt 6 kit and OpenCV 4 install, then run the `Eyeris` executable from the build directory.
+The same CMake project applies. Point `CMAKE_PREFIX_PATH` at your Qt 6 kit and `OpenCV_DIR` at the folder containing `OpenCVConfig.cmake`, then build and run the `Eyeris` executable from the build directory.
 
-```sh
-cmake -S . -B build \
-  -DCMAKE_PREFIX_PATH="<path-to-your-Qt6-kit>" \
-  -DOpenCV_DIR="<path-to-folder-containing-OpenCVConfig.cmake>"
-
-cmake --build build --parallel 4
-```
-
-- The Qt 6 kit must include `Qt6Svg`.
-- The `assets/` folder is copied next to the executable after each build. Run the app from the build output so it can find its artwork and icons.
-
-> **Verification status:** The macOS build and run is the path the team has used for development and demo. Builds on Windows and Linux follow the same CMake configuration but have not been verified by the team yet, so treat those instructions as untested.
-
-### Where the app looks for assets
-
-At startup the app searches for `assets/` in this order:
-
-1. `<executable directory>/assets/`
-2. `<executable directory>/../Resources/assets/` (macOS app bundle)
-3. The source `assets/` folder recorded at compile time
+> **Run from the build output.** The `assets/` folder (UI icons and generated barcode PNGs) must be reachable by the executable, so launch the app from the build output rather than copying the binary elsewhere.
 
 ---
 
 ## Using the Application
 
-The window is a fixed size (1163 × 574) with a brand panel on the left and a stacked set of pages on the right.
+The window has a persistent **navigation sidebar** on the far left and two working panels beside it:
 
-### Home
+```text
++------------------+--------------------------------------+------------------------------------+
+| SIDEBAR          | CENTRE PANEL (Working List / Cart)   | RIGHT PANEL (Context / Inspector)  |
+|                  |                                      |                                    |
+| [1] Place Order  | Current Order items, inline qty (+/-)| Live Camera Feed, Scanned Product  |
+|     (Current)    | Customer Name, Totals & Bill buttons | Stock, Description, Qty, Add to Cart|
+|                  |                                      |                                    |
+| [2] Order History| Scrollable list of past non-archived | Complete saved bill inspector,     |
+|     (Past Orders)| orders (Order#, Date, Customer, PKR) | Payment inputs, Mark as Paid, Archive|
+|                  |                                      |                                    |
+| [3] Product      | Tabs: [View Catalogue] [Add Product] | Selected Product Specs & Barcode   |
+|     Catalogue    | Product list, prices, stock status   | Edit/Restock form, Delete Product  |
++------------------+--------------------------------------+------------------------------------+
+```
 
-Two option cards: **Generate a barcode** and **Scan a barcode**.
+There are two roles. The **Cashier** operates the register (Current Order and Order History). The **Store Manager** inherits everything the Cashier can do and is also responsible for the **Product Catalogue**.
 
-### Generate a barcode
+### Page 1: Current Order (Place Order)
 
-1. Type a 6-digit number. The field accepts digits only (up to 6) and the first digit must be 1–9.
-2. Press **Enter** or click the arrow button.
-3. The barcode is rendered with the number printed beneath it. The preview is drawn with nearest-neighbor scaling so the bars stay crisp.
-4. Click **Save to disk**. The default file name is `barcode-<digits>.png`. The `.png` extension is added automatically, and you are asked to confirm before overwriting an existing file.
+[![Current Order page](documentation/Increment%202/Diagrams/Eyeris-1%28curr-ord%29.jpeg)](documentation/Increment%202/Diagrams/Eyeris-1%28curr-ord%29.jpeg)
 
-### Scan a barcode
+1. **Scan.** The camera starts automatically when you open the page. Hold a product's barcode in front of it. The right panel shows the product name, price excluding tax, and available stock. Removing the barcode from view leaves the product information on screen.
+2. **Description (optional).** Click **Description** to expand further product details inline, below the quantity input. No popup opens.
+3. **Add to Order.** Enter a quantity (units for `Count`, kg for `Weight`) and click **Add to Order**. If the product is already in the cart, the quantity is merged into its existing row. If the stock is insufficient, an inline warning appears and your input is kept so you can correct it.
+4. **Manage the cart.** Each row shows the acronym, unit price (excl. tax), unit discount, quantity, and line amount. Use `+` / `-` to adjust, and a row at `0` is removed. The summary box shows the live totals.
+5. **Bill.**
+   - **Generate Bill (Paid):** enter the Customer Name (required), an optional Contact, the Payment Amount (must equal the payable total), the Payment Mode (`Cash`, `Card`, `Wallet`), and the Merchant, then click **Generate Bill**. The cart clears and **Order History** opens with the new order selected.
+   - **Generate Bill and Put on Hold:** enter the Customer Name and click **Generate Bill and Put on Hold**. The order is saved as `OnHold` with no stock deducted, the cart clears, and **Order History** opens on the held order.
 
-Choose how to provide the barcode:
+### Page 2: Order History (Past Orders)
 
-- **Upload an Image:** pick a `.png`, `.jpg` or `.jpeg` file. The app locates the barcode, straightens it and decodes it.
-- **Use a Camera:** click **Start Camera** to open the default camera (device index `0`). The app checks a new frame every 200 ms. When a barcode is found and decoded, scanning stops automatically. Click **Stop Camera** to cancel.
+[![Order History page](documentation/Increment%202/Diagrams/Eyeris-2%28past-ord%29.jpeg)](documentation/Increment%202/Diagrams/Eyeris-2%28past-ord%29.jpeg)
 
-On success the **Found** page shows the decoded 6-digit number, with a **Scan another** button to start again.
+1. **Inspect.** The centre list shows every non-archived order (Order ID, customer, date / time, payable amount, status `Paid` or `OnHold`). Click one to see its saved bill in the right panel.
+2. **Mark as Paid (held orders).** Select an `OnHold` order, enter the Payment Mode, Merchant, and Amount, and click **Mark as Paid**. A fresh live stock check runs first. If stock is available, it is deducted and the order becomes `Paid` under its original Order ID and Bill ID.
+3. **Archive.** Click **Archive** to set the status to `Archived` and hide the order from the active list. Its records stay on disk.
 
-**Tips for a good scan**
+### Page 3: Product Catalogue (Store Manager)
 
-- Keep the whole barcode in view, including the blank white margins on its left and right.
-- Use even lighting and avoid glare or shadows across the bars.
-- Show only **one** barcode at a time.
-- Hold the barcode steady and large enough in the frame for the bars to be distinguishable.
+[![Product Catalogue page](documentation/Increment%202/Diagrams/Eyeris-3%28prod-cat%29.jpeg)](documentation/Increment%202/Diagrams/Eyeris-3%28prod-cat%29.jpeg)
+
+**View Catalogue tab**
+
+- Browse all products (acronym, name, price, stock). Zero-stock items show an **Out of stock** badge.
+- Select a product to see its full specification and barcode image.
+- **Edit and restock:** change the stock, price, tax, discount, and other details. The barcode number cannot be changed, and the measurement unit cannot be changed while an `OnHold` order references the product.
+- **Delete Product:** blocked with an error if an `OnHold` order references the product.
+
+**Add Product tab**
+
+1. Fill in Name, Acronym (max 8 characters), Unit (`Count` or `Weight`), Unit Price (PKR), Tax per unit, Discount per unit, Initial Stock, and a unique 6-digit barcode (`100000`–`999999`, no leading zero).
+2. Click **Generate Preview** to validate the barcode and see the Code 128 image.
+3. Click **Save Product**. The app allocates the next Product ID, saves the barcode PNG into `assets/`, and writes the record to `Product.txt`.
+
+### Increment 1 tools
+
+The standalone barcode generator, uploaded-image reader, and single webcam scan from Increment 1 remain part of the application. Their original design notes are in `documentation/Increment 1/`.
+
+**Tips for a good scan:** keep the whole barcode in view including the white margins on each side, use even lighting without glare, show only one barcode at a time, and hold it steady and large enough in the frame.
 
 ---
 
-## How It Works
+## Architecture & System Flow
 
-### Pipeline
+The backend is split into small services that receive their dependencies by reference at construction (non-owning dependency injection). The Qt UI layer (`PosWindow`, `main.cpp`) sits on top and calls the services.
 
 ```mermaid
 flowchart TD
-    UI["EyerisWindow (main.cpp)<br/>Qt 6 Widgets and SVG"]
+    UI["PosWindow / main.cpp<br/>Qt 6 UI layer"]
 
-    subgraph GEN["Generate and Save"]
-        UI -->|"6-digit QString"| VAL["Validate, encode, verify<br/>barcodeGenerator"]
-        VAL -->|"121-character 0/1 string"| PLOT["Render with OpenCV<br/>BarcodePlotter to cv::Mat"]
-        PLOT -->|"mat2QImage()"| PREVIEW["Preview in the UI"]
-        PREVIEW -->|"Save dialog"| SAVE["Save as PNG<br/>BarcodeImageIO"]
+    subgraph FRONT["Cashier-facing services"]
+        SCAN["PosScanner<br/>continuous camera scan"]
+        CART["CartService<br/>working cart"]
+        CHK["CheckoutService<br/>generate bill"]
+        HIST["HistoryService<br/>list, markPaid, archive"]
     end
 
-    subgraph READ["Read and Decode"]
-        FILE["Uploaded PNG or JPEG"] -->|"loadFile(QString)"| LOAD["Read bytes, check file signature,<br/>cv::imdecode"]
-        CAM["Camera: 200 ms timer<br/>startCamera / nextFrame"] --> PREP
-        LOAD --> PREP["ImageSource::prepare<br/>locate, then straighten"]
-        PREP -->|"Ready: grayscale barcode crop"| DEC["BarcodeDecoder::decode"]
-        PREP -->|"NoCandidate, MultipleCandidates,<br/>InvalidImage, CameraError, ProcessingError"| UI
-        DEC -->|"DecodeResult"| UI
+    subgraph CORE["Domain services"]
+        PROD["ProductService<br/>catalogue and stock"]
+        PRICE["PricingCalculator<br/>paisa arithmetic"]
+        IDS["IdGenerator<br/>product, order, bill IDs"]
+        ASSET["BarcodeAssetService<br/>barcode PNG assets"]
+    end
+
+    subgraph STORE["Storage"]
+        IPOS["IPosStore (interface)"]
+        POS["PosStorage<br/>Product / Order / OrderDetail / Bill .txt"]
+    end
+
+    subgraph INC1["Reused Increment 1"]
+        SRC["ImageSource<br/>camera, locate, straighten"]
+        DEC["BarcodeDecoder<br/>Code 128 Set B"]
+        GEN["barcodeGenerator, BarcodePlotter,<br/>BarcodeImageIO"]
+    end
+
+    UI --> SCAN
+    UI --> CART
+    UI --> CHK
+    UI --> HIST
+    UI --> PROD
+
+    SCAN --> SRC
+    SCAN --> DEC
+    CART --> PROD
+    CART --> PRICE
+    CHK --> PROD
+    CHK --> PRICE
+    CHK --> IDS
+    CHK --> IPOS
+    HIST --> PROD
+    HIST --> IPOS
+    PROD --> IPOS
+    PROD --> IDS
+    PROD --> ASSET
+    ASSET --> GEN
+    POS -.implements.-> IPOS
+```
+
+### Scan-to-cart flow
+
+```mermaid
+flowchart LR
+    CAM["Webcam frame"] -->|"ImageSource::nextFrame"| LOC["Locate and straighten barcode"]
+    LOC --> DEC["BarcodeDecoder::decode"]
+    DEC --> CHG{"Same code as last frame?"}
+    CHG -->|"Yes: codeChanged = false"| KEEP["Keep current product and quantity"]
+    CHG -->|"No: codeChanged = true"| LOOK["ProductService::findByBarcode"]
+    LOOK -->|"Found"| SHOW["Show name, price, stock"]
+    LOOK -->|"Not found"| NF["Product not found in catalogue"]
+    SHOW --> ADD["Add to Order: CartService::addByBarcode"]
+    ADD --> STK{"hasStock for existing + requested?"}
+    STK -->|"Yes"| ROW["Merge or create cart row, recalculate totals"]
+    STK -->|"No"| WARN["Insufficient stock warning, cart unchanged"]
+```
+
+### Generate Bill (Paid)
+
+```mermaid
+sequenceDiagram
+    actor C as Cashier
+    participant UI as PosWindow
+    participant CK as CheckoutService
+    participant PS as ProductService
+    participant PC as PricingCalculator
+    participant ID as IdGenerator
+    participant ST as IPosStore
+
+    C->>UI: Enter customer and payment, click Generate Bill
+    UI->>CK: generateBill(items, customer, payment, Paid, timestamp)
+    CK->>PS: Validate product exists, unit unchanged, stock sufficient
+    CK->>PC: calculate(items)
+    CK->>ID: saleIds(data, timestamp)
+    CK->>PS: deductStock(products, lines)
+    CK->>ST: save(data)
+    CK-->>UI: Result of SaleRecord
+    UI-->>C: Cart cleared, Order History opens on the new bill
+```
+
+### Mark a held order as paid
+
+```mermaid
+sequenceDiagram
+    actor C as Cashier
+    participant UI as PosWindow
+    participant HS as HistoryService
+    participant PS as ProductService
+    participant ST as IPosStore
+
+    C->>UI: Select OnHold order, enter payment, click Mark as Paid
+    UI->>HS: markPaid(orderId, payment)
+    HS->>ST: read()
+    HS->>PS: hasStock for every line (fresh live check)
+    alt Stock available
+        HS->>PS: deductStock(products, lines)
+        HS->>ST: save(data) with status Paid, same Order ID and Bill ID
+        HS-->>UI: Result of SaleRecord
+    else Stock depleted meanwhile
+        HS-->>UI: Error, order stays OnHold, nothing deducted
     end
 ```
 
-### Encoding (Code 128 Set B)
+---
 
-Each barcode is built as a string of **121 bits**:
+## Data Storage & File Formats
 
-| Part | Bits |
+All files are UTF-8 plain text, one record per line. Fields are separated by spaces, and string fields are wrapped in double quotes with `std::quoted`. Records end with `#` (except `OrderDetail.txt`). Storage is hidden behind the `IPosStore` interface, so the file format can change without touching the services.
+
+**Units:** money is stored in **paisas** (`45000` = PKR 450.00). Quantities and stock are stored in **thousandths** (`50000` = 50 items, `1500` = 1.5 kg).
+
+### `Product.txt`
+
+```text
+"id" "barcode" "acronym" "name" unit unitPrice taxPerUnit discountPerUnit available "barcodeImagePath" #
+```
+
+Example:
+
+```text
+"P001" "123456" "TEA-BLK" "Black Tea 250g" count 45000 7650 0 50000 "assets/barcode-123456.png" #
+```
+
+### `Order.txt`
+
+```text
+"orderId" "YYYY-MM-DD" "HH:mm:ss" "customerName" "customerContact" status paymentAmount paymentMode "merchant" #
+```
+
+Example (the 8-digit Order ID ends in the day of the month):
+
+```text
+"20261119" "2026-11-19" "14:32:00" "Ali Khan" "03001234567" paid 52650 cash "-" #
+```
+
+### `OrderDetail.txt`
+
+No `#` terminator.
+
+```text
+"orderId" "productId" "barcode" quantity
+```
+
+Example:
+
+```text
+"20261119" "P001" "123456" 1000
+```
+
+### `Bill.txt`
+
+```text
+"billId" "customerName" "orderId" ["acronym" unitPrice discountPerUnit quantity]... subtotal tax discount payable status #
+```
+
+Each line item repeats four fields (`acronym`, `unitPrice`, `discountPerUnit`, `quantity`), followed by the four totals, the status, and `#`. Illustrative example with a 9-digit Bill ID:
+
+```text
+"300000001" "Ali Khan" "20261119" "TEA-BLK" 45000 0 1000 45000 7650 0 52650 paid #
+```
+
+### Status values
+
+| Order status | Meaning |
 |---|---|
-| Left quiet zone (white) | 10 |
-| Start B | 11 |
-| 6 data digits (11 bits each) | 66 |
-| Checksum symbol | 11 |
-| Stop | 13 |
-| Right quiet zone (white) | 10 |
-| **Total** | **121** |
-
-- A lookup table holds all 107 Code 128 symbol patterns (values 0–106).
-- Digits `'0'`–`'9'` map to Set B symbol values 16–25 (ASCII value minus 32).
-- The checksum is `(startValue + Σ(symbolValue × position)) mod 103`, where Start B has value 104 and positions count from 1. For `123456` the checksum is **16**.
-- After generating the bits, the encoder verifies its own output: length, quiet zones, Start B, each digit, the checksum and the stop pattern.
-
-### Rendering
-
-- Each bit is drawn two pixels wide (`MODULE_WIDTH = 2`), so the barcode image is **242 px wide**, with 100 px tall bars.
-- The 6-digit number is printed centered beneath the bars.
-- Rendering uses OpenCV (`cv::Mat`). A small adapter (`mat2QImage`) converts the result to a `QImage` for display and saving as a **lossless PNG**.
-
-### Locating and straightening a barcode (`ImageSource`)
-
-Candidate detection uses **pure OpenCV image processing**. It does not use OpenCV's built-in barcode detector.
-
-1. The image is shrunk (longest side at most 640 px) for fast analysis.
-2. Sobel gradients and a smoothed **structure tensor** highlight regions with strong, consistently oriented edges, which is what parallel barcode bars look like.
-3. Morphological closing joins those regions into blobs, and contours are extracted.
-4. Blobs are filtered by size, aspect ratio, fill ratio and directional coherence, and their dominant bar angle is estimated.
-5. A final check confirms the region really contains alternating black and white bars (typically 22–110 transitions across several scanlines).
-6. The result is **0 candidates** (`NoCandidate`), **more than 1** (`MultipleCandidates`), or **exactly 1**. A single candidate is straightened with a perspective warp, keeping the real white margins on both sides without inventing artificial ones.
-
-### Decoding (`BarcodeDecoder`)
-
-1. Convert to a binary image with **Otsu thresholding**.
-2. Sample up to **31 evenly spaced rows** across the barcode.
-3. Convert each row into **run lengths** (alternating white and black pixel widths).
-4. Slide a 57-run window across the row. It covers quiet zone, Start B, six digits, checksum, Stop and the closing quiet zone.
-5. Estimate the module width, check the quiet zones, and match each group of runs against the symbol table using a normalized error score. Ambiguous matches (the best match not clearly better than the second best) are rejected.
-6. Decode the six digits, check the first digit is non-zero, then **independently decode the printed checksum symbol** and require it to match the checksum computed from the digits.
-7. Repeat on the horizontally flipped image so upside-down barcodes also decode.
-8. If different rows or directions give conflicting valid readings, the decoder rejects the result and asks the user to try again.
+| `InProgress` | Working state in the data model, before a bill is saved |
+| `OnHold` | Bill saved, payment not recorded, stock not deducted |
+| `Paid` | Payment recorded and stock deducted |
+| `Archived` | Hidden from the active history list, records preserved |
 
 ---
 
 ## Repository Structure
 
-All C++ sources sit at the repository root.
-
 ```text
 ISE-Project/
-├── CMakeLists.txt             # Build configuration for the "Eyeris" target
-├── README.md                  # This file
-├── .gitignore
-├── ReaderContracts.h          # Shared types: ImageStatus, InputResult, DecodeResult
-├── main.cpp                   # Qt 6 GUI (EyerisWindow) and application orchestration
-├── barcodeGenerator.h / .cpp  # Input validation, Code 128 Set B encoder, checksum, verification
-├── BarcodePlotter.h / .cpp    # OpenCV barcode renderer and cv::Mat to QImage adapter
-├── BarcodeImageIO.h / .cpp    # PNG saving (and an image-loading helper)
-├── camera-harness.h / .cpp    # ImageSource: file loading, camera capture, locate and straighten
-├── BarcodeDecoder.h / .cpp    # Custom Code 128 Set B decoder
-├── assets/
-│   ├── eyeris-background.png  # Brand panel artwork
-│   ├── arrow-right.svg        # Generate submit icon
-│   └── chevron-left.svg       # Back button icon
-└── documentation/
-    ├── Decisions.md           # Project decision log
-    ├── Increment 1/           # Increment 1 notes, requirements, and diagrams
+├── CMakeLists.txt                         # CMake build script
+├── README.md                              # This file
+├── .gitignore                             # Git ignore rules
+├── ReaderContracts.h                      # Shared Increment 1 reader structs
+├── PosTypes.h                             # Shared Increment 2 business structs and enums
+├── IPosStore.h                            # Pure abstract storage interface
+├── PosStorage.h / .cpp                    # File storage implementation (4 text files)
+├── IdGenerator.h / .cpp                   # Product, order, and bill ID generation
+├── ProductService.h / .cpp                # Product catalogue and stock validation service
+├── BarcodeAssetService.h / .cpp           # Barcode generation and PNG asset helper
+├── CartService.h / .cpp                   # Cart management and live stock verification
+├── PricingCalculator.h / .cpp             # Rounding and payable calculation engine
+├── PosScanner.h / .cpp                    # Continuous POS camera scanning adapter
+├── camera-harness.h / .cpp                # ImageSource: OpenCV capture, locate, straighten
+├── barcodeGenerator.h / .cpp              # Code 128 Set B encoder and checksum verification
+├── BarcodePlotter.h / .cpp                # Barcode renderer and QImage conversion
+├── BarcodeImageIO.h / .cpp                # PNG image saving helpers
+├── BarcodeDecoder.h / .cpp                # Custom Code 128 Set B barcode decoder
+├── main.cpp                               # Application entry point and POS window integration
+├── src/                                   # Checkout and History subsystem
+│   ├── CheckoutService.h / .cpp           # Bill generation, stock deduction, payment recording
+│   └── HistoryService.h / .cpp            # Order history retrieval, deferred payment, archive
+├── assets/                                # UI icons and generated barcode PNGs
+│   ├── arrow-right.svg
+│   ├── chevron-left.svg
+│   └── eyeris-background.png
+└── documentation/                         # Project design documents and diagrams
+    ├── Decisions.md                       # Architecture and design decisions register
+    ├── Increment 1/                       # Increment 1 documentation and diagrams
     │   ├── Increment 1 Requirements.md
     │   ├── Program Flow.md
     │   ├── increment1_meetingnotes.md
     │   ├── UML-diagram.png
     │   └── usecase_diagram.png
-    └── Increment 2/
-        └── Increment 2 Requirements.md
+    └── Increment 2/                       # Increment 2 documentation and diagrams
+        ├── Increment 2 Requirements.md
+        ├── Increment2proposal.md
+        ├── Interface Design.md
+        ├── Proposed System Design.md
+        ├── Meeting Notes.md
+        ├── Increment2_UML_Class_Structure.md
+        ├── Increment2_UseCase_Specification.md
+        └── Diagrams/
+            ├── UML-Backend.png            # Complete backend class diagram
+            ├── UML-DataRecords.png        # Shared data structures diagram
+            ├── use-case-diagram.png       # Complete POS use case diagram
+            ├── Eyeris-1(curr-ord).jpeg    # UI screenshot: Current Order page
+            ├── Eyeris-2(past-ord).jpeg    # UI screenshot: Order History page
+            └── Eyeris-3(prod-cat).jpeg    # UI screenshot: Product Catalogue page
 ```
 
 ---
 
-## Module Reference
+## UML Diagrams & Module Reference
 
-The diagram below shows the backend classes and how they relate. The user interface (`main.cpp`) is not included. Click the image to open it full size.
+Click any diagram to open it full size.
 
-[![Backend class diagram](documentation/Increment%201/UML-diagram.png)](documentation/Increment%201/UML-diagram.png)
+### Use Case Diagram
 
-The sections below describe each module in detail.
+[![Use Case Diagram](documentation/Increment%202/Diagrams/use-case-diagram.png)](documentation/Increment%202/Diagrams/use-case-diagram.png)
 
-### Shared contracts (`ReaderContracts.h`)
+### Backend Class Diagram
 
-```cpp
-enum class ImageStatus {
-    Ready, NoCandidate, MultipleCandidates,
-    InvalidImage, CameraError, ProcessingError
-};
+[![Backend Class Diagram](documentation/Increment%202/Diagrams/UML-Backend.png)](documentation/Increment%202/Diagrams/UML-Backend.png)
 
-struct InputResult {
-    ImageStatus status;
-    std::string message;
-    cv::Mat barcode;   // On Ready: grayscale (CV_8UC1) crop of the single barcode
-    cv::Mat preview;   // Camera frames only: BGR frame for the live preview
-};
+### Shared Data Records Diagram
 
-struct DecodeResult {
-    bool found;
-    std::string message;
-    std::string code;  // The decoded 6-digit number when found
-};
-```
+[![Data Records Diagram](documentation/Increment%202/Diagrams/UML-DataRecords.png)](documentation/Increment%202/Diagrams/UML-DataRecords.png)
 
-### `barcodeGenerator` — encoder
+The full class dictionary, relationship list, and PlantUML / Mermaid source are in [`Increment2_UML_Class_Structure.md`](documentation/Increment%202/Increment2_UML_Class_Structure.md). The user interface (`PosWindow`, `main.cpp`) is intentionally not part of the class diagrams.
 
-| Function | Purpose |
-|---|---|
-| `isValid6DigitInput(code)` | Exactly 6 characters, all digits, first digit `1`–`9` |
-| `getCode128Pattern(value)` | Looks up the bit pattern for symbol values 0–106 |
-| `calculateChecksum(startValue, code6)` | Mod-103 checksum |
-| `generateBarcodeBits(code6)` | Builds the 121-bit string |
-| `verifyEncoding(code6, bits)` | Checks the generated bits segment by segment |
+### Module Reference
 
-### `BarcodePlotter` and `BarcodeImageIO` — image output
-
-| Function | Purpose |
-|---|---|
-| `codedString2Image(bits, value, showText)` | Validates the bit string and draws the barcode as a BGR `cv::Mat` |
-| `mat2QImage(mat)` | Converts a BGR `cv::Mat` to a deep-copied `QImage` |
-| `saveBarcodeImage(image, path)` | Saves a `QImage` as PNG |
-
-### `ImageSource` (`camera-harness`) — input
-
-| Function | Purpose |
-|---|---|
-| `loadFile(const QString& path)` | Reads a PNG or JPEG file (checks its signature), decodes it, then prepares it |
-| `loadFile(const cv::Mat& image)` | Prepares an already-loaded image (1, 3 or 4 channels) |
-| `startCamera(index, message)` | Opens the camera, releasing any previous capture |
-| `nextFrame()` | Reads one frame and returns the prepared result plus a preview |
-| `stopCamera()` | Releases the camera (safe to call repeatedly) |
-
-### `BarcodeDecoder` — output
-
-| Function | Purpose |
-|---|---|
-| `decode(const cv::Mat& barcode)` | Decodes a grayscale barcode crop into a `DecodeResult` |
-
-The decoder requires at least **121 pixels** of width (one pixel per module).
+| Module | Files | Responsibility |
+|---|---|---|
+| **`IPosStore` / `PosStorage`** | `IPosStore.h`, `PosStorage.h/.cpp` | Abstract interface and file-backed persistence for `Product.txt`, `Order.txt`, `OrderDetail.txt`, and `Bill.txt`. |
+| **`IdGenerator`** | `IdGenerator.h/.cpp` | Generates sequential 8-digit Order IDs, 9-digit Bill IDs, and product IDs. |
+| **`ProductService`** | `ProductService.h/.cpp` | Product lookup, live inventory checks (`hasStock`), stock deduction (`deductStock`), and catalogue create / update / remove. |
+| **`BarcodeAssetService`** | `BarcodeAssetService.h/.cpp` | Reuses the Increment 1 encoder and renderer to preview barcodes and save barcode PNG assets under `assets/`. |
+| **`CartService`** | `CartService.h/.cpp` | Manages working cart items, validates stock before adding, checks unit consistency, and calculates row totals. |
+| **`PricingCalculator`** | `PricingCalculator.h/.cpp` | Pure calculator for subtotal, tax, discount, and payable using integer paisa math with half-paisa rounding up. |
+| **`PosScanner`** | `PosScanner.h/.cpp` | Continuous camera scanner adapter around `ImageSource` and `BarcodeDecoder`, filtering duplicate frame scans. |
+| **`CheckoutService`** | `src/CheckoutService.h/.cpp` | Validates payments, deducts inventory, assigns IDs, and saves complete Paid or OnHold transactions. |
+| **`HistoryService`** | `src/HistoryService.h/.cpp` | Lists non-archived orders, retrieves exact saved bills, completes payment via `markPaid`, and archives orders. |
+| **`ImageSource`** | `camera-harness.h/.cpp` | Low-level camera stream grabber, gradient-tensor localization, and perspective warping. |
+| **`BarcodeDecoder`** | `BarcodeDecoder.h/.cpp` | Strict Code 128 Set B decoder with Otsu binarization, 31-line sampling, and independent checksum verification. |
+| **`barcodeGenerator`, `BarcodePlotter`, `BarcodeImageIO`** | `barcodeGenerator.*`, `BarcodePlotter.*`, `BarcodeImageIO.*` | Increment 1 utilities: validation and Code 128 Set B encoding with Mod-103 checksum, barcode rendering to `cv::Mat` / `QImage`, and PNG saving. |
 
 ---
 
 ## Error Handling
 
-The application reports clear messages instead of failing silently:
-
-| Situation | Behavior |
+| Failure / scenario | System behavior |
 |---|---|
-| Empty, too short, too long, non-digit or leading-zero input | Rejected before generation |
-| File is not a readable PNG/JPEG image | `InvalidImage` error message |
-| No barcode found in the image | `NoCandidate` |
-| More than one barcode in view | `MultipleCandidates`, with a prompt to scan one at a time |
-| Barcode found but unreadable or failing the checksum | Decode failure message and a prompt to try again |
-| Camera cannot be opened or read | `CameraError`, and scanning stops |
-| Processing problem | `ProcessingError`, and scanning stops |
-| Saving the PNG fails | Error message shown |
-
-While the camera is running, `NoCandidate`, `MultipleCandidates` and decode retries are shown as non-blocking status messages, and scanning continues. Scanning stops automatically on a successful decode or on a camera or processing error.
+| **Camera hardware failure** | `PosScanner::poll()` returns `success = false`, camera polling stops, and an inline error is shown in the UI. |
+| **Insufficient inventory stock** | `CartService::addByBarcode()` blocks the addition and returns: *"Insufficient stock: X already in order + Y requested exceeds Z available."* |
+| **Product measurement unit changed** | Positive quantity changes and checkout are blocked: *"Product measurement unit has changed. Restore the original unit or remove this item from the order."* |
+| **Unregistered barcode scanned** | `success = true`, the preview continues, and *"Product not found in catalogue."* is shown. |
+| **Same barcode held in frame** | `PosScanner::poll()` sets `codeChanged = false`; the preview continues without re-adding or clearing the quantity. |
+| **Stock depleted at checkout** | Checkout aborts with an error. Cart items and inventory stay unchanged. |
+| **Held order's stock depleted** | `HistoryService::markPaid()` re-checks live stock. If another sale used it up, payment is rejected and the order stays `OnHold`. |
+| **Deleting a product in a held order** | `ProductService::remove()` is blocked: *"Cannot delete product referenced by an active on-hold order."* |
+| **Negative or invalid quantities** | Rejected at the input validation boundary before they reach the domain services. |
 
 ---
 
 ## Testing
 
-The team's acceptance checklist for Increment 1 covers the following scenarios. Record your own results as you run them.
+The acceptance checklist below is derived from the use case flows in [`Increment2_UseCase_Specification.md`](documentation/Increment%202/Increment2_UseCase_Specification.md). Record your own results as you run them.
 
-**End to end** (generate → display → save PNG → upload PNG → decode, and camera scan) for `100000`, `123456` and `999999`.
+**Scanning and cart**
+- Scan a registered barcode: name, price, and stock appear; holding it still does not reset the quantity.
+- Scan an unregistered barcode: *"Product not found in catalogue."* and the preview keeps running.
+- Add the same product twice: one merged row, never a duplicate row.
+- Request more than the available stock (including `already in cart + requested`): inline warning, cart unchanged, input preserved.
+- Use `+` / `-` on a row; reduce to `0` to remove it. Totals recalculate immediately.
+- Fractional `Weight` quantities (for example `1.5` kg) and half-paisa rounding.
 
-**Input validation:** reject empty input, `012345` (leading zero), `12345` (too short), `1234567` (too long) and `123A56` (non-digit).
+**Billing**
+- Generate Bill (Paid) with `Cash`, `Card`, and `Wallet`: stock is deducted, 8-digit Order ID and 9-digit Bill ID are assigned, and the three files are written with status `Paid`.
+- Generate Bill and Put on Hold: files are written with status `OnHold` and **no stock is deducted**.
+- Missing Customer Name, or a payment amount that differs from the payable total: rejected.
+- Stock depleted between adding to the cart and checkout: checkout aborts with nothing changed.
 
-**Failure handling:** corrupt or non-image files, no barcode in the image, two barcodes in one frame (including two identical ones), a tampered checksum, an unavailable camera, a save failure, and tilted, glared or blurred images (these should fail cleanly, without made-up digits).
+**Order history**
+- Open a saved bill: it shows historical prices, even after the catalogue prices were edited.
+- Mark as Paid on a held order with stock available: status becomes `Paid`, the IDs are unchanged, and no duplicate records are created.
+- Mark as Paid after the stock was used up elsewhere: rejected, order stays `OnHold`.
+- Archive an order: it leaves the active list while its records remain in the files.
 
-> The repository does not yet include recorded results for this matrix or an automated test suite. Results should be added here once the team has run them.
+**Catalogue**
+- Add a product (valid and invalid barcodes such as `012345`, `12345`, `1234567`, `123A56`, and a duplicate barcode): the barcode PNG is saved to `assets/` and the record is appended to `Product.txt`.
+- Restock an out-of-stock product: it returns to active inventory.
+- Change a product's unit, and delete a product, while an `OnHold` order references it: both blocked.
 
----
+**Failure handling**
+- Unavailable camera, corrupt files, and glare, blur, or tilt: should fail cleanly with a message and no made-up digits.
 
-## Known Limitations
-
-- **Scope:** only **6-digit Code 128 Set B** barcodes with a non-zero first digit (`100000`–`999999`). Other lengths, symbologies and character sets are not supported.
-- **Quiet zones matter:** the decoder needs clear white margins on both sides of the barcode. Tightly cropped images can fail to decode.
-- **One barcode at a time:** images or frames with several barcodes are rejected on purpose.
-- **Small generated barcodes:** a generated PNG is 242 px wide, which suits direct upload but can be small for a low-resolution webcam to read from a screen or print at a distance.
-- **Lighting sensitivity:** the decoder uses a single global (Otsu) threshold. Strong glare, shadows or uneven lighting across the bars can break decoding.
-- **Low-resolution or blurred codes:** very small (under about 80 × 12 px) or heavily blurred barcodes are reported as not found or not readable by design.
-- **Camera selection:** the app always uses camera index `0`, with no camera picker.
-- **Responsiveness:** decoding and frame processing run on the GUI thread every 200 ms during scanning, which can cause brief stutters on slow hardware or very large images.
-- **Fixed window size** (1163 × 574), with fonts tuned for macOS.
-- **Platform verification:** builds are verified on macOS only (see [Building and Running](#building-and-running)).
+> This README does not include recorded results for this matrix. Add them here once the team has run them.
 
 ---
 
@@ -374,33 +573,52 @@ The team's acceptance checklist for Increment 1 covers the following scenarios. 
 
 | Decision | Outcome |
 |---|---|
-| Barcode symbology | **Code 128** over EAN-13, chosen by team vote. It is less complex and only 6 digits are needed. |
-| Barcode libraries | **None.** After confirming with the instructor that encoding and decoding must be done manually, ZXing-cpp was dropped and the team wrote its own encoder and decoder. |
-| Image processing | **OpenCV**, for rendering, file decoding, camera capture and barcode localization. |
-| GUI | **Qt 6**, used only for the front end. |
-| Qt/OpenCV bridge | A small adapter converts `cv::Mat` images to `QImage` for display and saving. |
+| Barcode symbology and libraries | **Code 128 Set B**, with the encoder, checksum, and decoder written by the team. No external barcode library is used. |
+| Storage abstraction | Services depend on the **`IPosStore` interface**, implemented by `PosStorage`. The file format is isolated behind it. |
+| Dependency injection | High-level services receive **non-owning references** to their dependencies at construction (`IPosStore&`, `ProductService&`, `PricingCalculator&`, `IdGenerator&`, `ImageSource&`, `BarcodeDecoder&`). |
+| Pure data records | Structs in `PosTypes.h` (`Product`, `CartItem`, `SaleRecord`, `Totals`, and others) hold values only, with no behavior. |
+| Reuse of Increment 1 | `PosScanner` adapts the camera harness and decoder to continuous scanning, and `BarcodeAssetService` adapts barcode plotting and saving. |
+| Money and quantities | **Integer paisas and thousandths** everywhere. Half-paisa rounds up with `(rate * qty + 500) / 1000`. |
+| Price snapshots | A cart row keeps the price, tax, and discount captured when it was added, so catalogue edits cannot change an item already scanned. |
+| On-hold orders | Stock is **not** reserved or deducted when an order is put on hold. It is re-checked and deducted when the order is marked paid. |
+| Order integrity | Mark as Paid keeps the original Order ID and Bill ID. Archiving hides an order but never deletes its records. |
+| Referential locks | Deleting a product, or changing its unit, is blocked while an `OnHold` order references it. The barcode of an existing product is fixed. |
+| UI separation | The Qt UI layer is kept out of the backend services and class diagrams. |
 
-The full history is in [`documentation/Decisions.md`](documentation/Decisions.md) and [`documentation/Increment 1/increment1_meetingnotes.md`](documentation/Increment%201/increment1_meetingnotes.md).
+The full history is in [`documentation/Decisions.md`](documentation/Decisions.md) and [`documentation/Increment 2/Meeting Notes.md`](documentation/Increment%202/Meeting%20Notes.md).
 
 ---
 
 ## Team
 
-| Member | Area | Main files |
+| Member | Area of ownership | Assigned source files |
 |---|---|---|
-| **Zaryab** | Desktop interface, build setup and integration | `main.cpp`, `CMakeLists.txt`, `assets/` |
-| **Nosher** | Barcode generation logic (Code 128 Set B encoder) | `barcodeGenerator.h/.cpp` |
-| **Khurram** | Barcode image rendering and PNG saving | `BarcodePlotter.h/.cpp`, `BarcodeImageIO.h/.cpp` |
-| **Rayyan** | Camera capture, barcode localization and straightening | `camera-harness.h/.cpp` |
-| **Rayan** | Barcode decoding | `BarcodeDecoder.h/.cpp` |
-
-## Documentation
-
-- [`documentation/Decisions.md`](documentation/Decisions.md): project decision log
-- [`documentation/Increment 1/increment1_meetingnotes.md`](documentation/Increment%201/increment1_meetingnotes.md): meeting notes and action items
-- [`documentation/Increment 1/UML-diagram.png`](documentation/Increment%201/UML-diagram.png): UML class diagram of the backend classes
-- [`documentation/Increment 1/usecase_diagram.png`](documentation/Increment%201/usecase_diagram.png): use case diagram (an early Increment 1 version; it may not reflect later changes to ownership and libraries)
+| **Zaryab** (P1) | Desktop GUI, page navigation, UI integration, and build setup | `main.cpp`, `CMakeLists.txt`, `assets/` |
+| **Nosher** (P2) | Product catalogue service, inventory rules, and barcode asset generation | `ProductService.h/.cpp`, `BarcodeAssetService.h/.cpp` |
+| **Khurram** (P3) | Data storage engine (4 files), storage interface, and ID sequencing | `IPosStore.h`, `PosStorage.h/.cpp`, `IdGenerator.h/.cpp` |
+| **Rayyan** (P4) | Cart service, pricing and rounding calculations, and continuous POS camera scanning | `CartService.h/.cpp`, `PricingCalculator.h/.cpp`, `PosScanner.h/.cpp` |
+| **Rayan Dar** (P5) | Bill checkout, stock deduction, order history, deferred payment, and archiving | `src/CheckoutService.h/.cpp`, `src/HistoryService.h/.cpp` |
 
 ---
 
-*Later increments build on this barcode generator and reader for the full store inventory and sales system.*
+## Documentation
+
+### Diagrams
+
+- [`documentation/Increment 2/Diagrams/use-case-diagram.png`](documentation/Increment%202/Diagrams/use-case-diagram.png): use case diagram
+- [`documentation/Increment 2/Diagrams/UML-Backend.png`](documentation/Increment%202/Diagrams/UML-Backend.png): backend architecture class diagram
+- [`documentation/Increment 2/Diagrams/UML-DataRecords.png`](documentation/Increment%202/Diagrams/UML-DataRecords.png): core data structures and DTOs diagram
+- [`documentation/Increment 2/Diagrams/Eyeris-1(curr-ord).jpeg`](documentation/Increment%202/Diagrams/Eyeris-1%28curr-ord%29.jpeg): Eyeris UI, Current Order page
+- [`documentation/Increment 2/Diagrams/Eyeris-2(past-ord).jpeg`](documentation/Increment%202/Diagrams/Eyeris-2%28past-ord%29.jpeg): Eyeris UI, Order History page
+- [`documentation/Increment 2/Diagrams/Eyeris-3(prod-cat).jpeg`](documentation/Increment%202/Diagrams/Eyeris-3%28prod-cat%29.jpeg): Eyeris UI, Product Catalogue page
+
+### Specifications and Records
+
+- [`documentation/Increment 2/Increment2_UseCase_Specification.md`](documentation/Increment%202/Increment2_UseCase_Specification.md): full use case specifications and interaction flows
+- [`documentation/Increment 2/Increment 2 Requirements.md`](documentation/Increment%202/Increment%202%20Requirements.md): official assignment requirements
+- [`documentation/Decisions.md`](documentation/Decisions.md): project architecture and design decisions register
+- [`documentation/Increment 1/`](documentation/Increment%201/): Increment 1 requirements, program flow, meeting notes, and diagrams
+
+---
+
+*Increment 2 turns the Increment 1 barcode engine into a complete store point-of-sale and inventory system.*
