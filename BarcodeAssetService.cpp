@@ -15,6 +15,10 @@ BarcodeAssetService::BarcodeAssetService(std::filesystem::path dataRoot)
     : dataRoot_(std::move(dataRoot)) {
 }
 
+std::filesystem::path BarcodeAssetService::imagePath(const string& barcode) const {
+    return dataRoot_ / (barcode + ".png");
+}
+
 /**
  * @brief Generates a QImage preview of the barcode for UI display.
  * Reuses the Increment 1 encoder and Qt drawing pipeline in memory.
@@ -32,7 +36,11 @@ QImage BarcodeAssetService::preview(const string& barcode) const {
     }
 
     // Render the bitstream to a Qt image container
-    return codedString2Image(bits, QString::fromStdString(barcode), true);
+    try {
+        return mat2QImage(codedString2Image(bits, barcode, true));
+    } catch (const cv::Exception&) {
+        return {};
+    }
 }
 
 /**
@@ -54,10 +62,23 @@ Result<string> BarcodeAssetService::save(const string& barcode) const {
 
     // Construct the destination file path (e.g., "123456.png")
     string filename = barcode + ".png";
-    std::filesystem::path fullPath = dataRoot_ / filename;
+    const auto fullPath = imagePath(barcode);
+    const QString destination = QString::fromStdString(fullPath.u8string());
+    std::error_code fileError;
+    const bool existing = std::filesystem::exists(fullPath, fileError);
+    if (fileError) {
+        return {false, "Could not check the barcode image destination.", {}};
+    }
+    if (existing) {
+        const QImage previous = loadBarcodeImage(destination);
+        if (!previous.isNull() && previous.convertToFormat(img.format()) == img) {
+            return {true, {}, filename};
+        }
+        return {false, "A different image already exists at the barcode destination.", {}};
+    }
 
     // Persist the image to disk using the standard I/O module
-    bool saved = saveBarcodeImage(img, QString::fromStdString(fullPath.string()));
+    bool saved = saveBarcodeImage(img, destination);
 
     if (saved) {
         result.success = true;

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 
 using namespace std;
@@ -20,9 +21,8 @@ string formatQuantity(Unit unit, int64_t qtyThousandths) {
         return std::to_string(qtyThousandths / 1000);
     }
 
-    double kg = static_cast<double>(qtyThousandths) / 1000.0;
     ostringstream ss;
-    ss << std::fixed << std::setprecision(3) << kg;
+    ss << qtyThousandths / 1000 << '.' << setfill('0') << setw(3) << qtyThousandths % 1000;
     string s = ss.str();
 
     // Trim trailing zeros and decimal point
@@ -90,11 +90,18 @@ Status CartService::addByBarcode(const std::string& barcode, int64_t addition) {
     }
 
     if (existing != nullptr) {
+        if (existing->product.barcode != liveProduct.barcode) {
+            return {false, "The catalogue product changed. Remove the old cart row before adding it."};
+        }
         // Block positive quantity changes if unit has changed
         if (existing->product.unit != liveProduct.unit) {
             return {false, "Product measurement unit has changed. Restore the original unit or remove this item from the order."};
         }
 
+        if (addition > numeric_limits<int64_t>::max() - existing->quantity) {
+            return {false, makeInsufficientStockMessage(liveProduct.unit, existing->quantity,
+                                                        addition, liveProduct.available)};
+        }
         const int64_t combined = existing->quantity + addition;
 
         // Check stock: required quantity = existing row quantity + addition
@@ -158,6 +165,9 @@ Status CartService::setQuantity(const string& productId, int64_t quantity) {
     }
     const Product& liveProduct = prodRes.value;
 
+    if (existing->product.barcode != liveProduct.barcode) {
+        return {false, "The catalogue product changed. Remove the old cart row before editing it."};
+    }
     // Unit mismatch check
     if (existing->product.unit != liveProduct.unit) {
         return {false, "Product measurement unit has changed. Restore the original unit or remove this item from the order."};

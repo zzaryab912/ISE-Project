@@ -23,6 +23,7 @@
 #include <QStringList>
 #include <QRegularExpressionValidator>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QString>
 #include <QSvgRenderer>
 #include <QTimer>
@@ -32,6 +33,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 
 #include "BarcodeDecoder.h"
@@ -40,6 +42,16 @@
 #include "ReaderContracts.h"
 #include "barcodeGenerator.h"
 #include "camera-harness.h"
+#include "BarcodeAssetService.h"
+#include "CartService.h"
+#include "CheckoutService.h"
+#include "HistoryService.h"
+#include "IdGenerator.h"
+#include "PosScanner.h"
+#include "PosStorage.h"
+#include "PosWindow.h"
+#include "PricingCalculator.h"
+#include "ProductService.h"
 
 namespace {
 
@@ -798,7 +810,31 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("Eyeris"));
     QApplication::setOrganizationName(QStringLiteral("Eyeris"));
 
-    EyerisWindow window;
+    const QString location = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (location.isEmpty()) {
+        QMessageBox::critical(nullptr, "Eyeris", "Could not locate the POS data directory.");
+        return 1;
+    }
+    const auto dataRoot = std::filesystem::u8path(location.toUtf8().constData());
+    PosStorage store(dataRoot);
+    const Status loaded = store.load();
+    if (!loaded.success) {
+        QMessageBox::critical(nullptr, "Eyeris", QString::fromStdString(loaded.message));
+        return 1;
+    }
+
+    const IdGenerator ids;
+    const PricingCalculator pricing;
+    BarcodeAssetService images(dataRoot);
+    ProductService products(store, images, ids);
+    CartService cart(products, pricing);
+    ImageSource camera;
+    const BarcodeDecoder decoder;
+    PosScanner scanner(camera, decoder);
+    CheckoutService checkout(store, products, pricing, ids);
+    HistoryService history(store, products);
+    PosWindow window(products, images, cart, scanner, checkout, history);
     window.show();
+    window.showPage("Current Order");
     return app.exec();
 }

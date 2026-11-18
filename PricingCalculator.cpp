@@ -1,109 +1,60 @@
 #include "PricingCalculator.h"
+
 #include <limits>
-#include <sstream>
 
-using namespace std;
+namespace {
 
-namespace{
+constexpr auto maxAmount = std::numeric_limits<std::int64_t>::max();
 
-
-    bool multiplyAndRoundPaisa(int64_t rate, int64_t qty, int64_t& out){
-
-
-        if (rate < 0 || qty < 0) 
+// Split the fixed-point multiplication so a representable result does not
+// fail just because the intermediate product exceeds the integer range.
+bool roundedPaisa(std::int64_t rate, std::int64_t quantity, std::int64_t& amount)
+{
+    const auto whole = quantity / 1000;
+    const auto remainder = quantity % 1000;
+    const auto fraction = (rate / 1000) * remainder +
+        ((rate % 1000) * remainder + 500) / 1000;
+    if (whole != 0 && rate > (maxAmount - fraction) / whole) {
         return false;
-    
-    if (rate == 0 || qty == 0) {
-        out = 0;
-        return true;
     }
-
-    constexpr int64_t kMax = numeric_limits<int64_t>::max();
-
-    if(rate > (kMax - 500) / qty)
-      return false;
-
-      out = (rate * qty + 500) / 1000;
-      return true;
-
-    }
+    amount = rate * whole + fraction;
+    return true;
 }
 
+} // namespace
 
-Result<Totals> PricingCalculator::calculate(const vector<CartItem>& items) const{
+Result<Totals> PricingCalculator::calculate(const std::vector<CartItem>& items) const
+{
+    Totals totals;
+    for (const CartItem& item : items) {
+        const Product& product = item.product;
+        if (item.quantity < 0 || product.unitPrice < 0 || product.taxPerUnit < 0 ||
+            product.discountPerUnit < 0 || product.discountPerUnit > product.unitPrice) {
+            return {false, "Invalid quantity, price, tax or discount.", {}};
+        }
+        if ((product.unit != Unit::Count && product.unit != Unit::Weight) ||
+            (product.unit == Unit::Count && item.quantity % 1000 != 0)) {
+            return {false, "Invalid measurement unit or fractional Count quantity.", {}};
+        }
 
-    if(items.empty()){
-       return {true, "Cart is empty.", Totals{0,0,0,0}};
+        Totals line;
+        if (!roundedPaisa(product.unitPrice, item.quantity, line.subtotal) ||
+            !roundedPaisa(product.taxPerUnit, item.quantity, line.tax) ||
+            !roundedPaisa(product.discountPerUnit, item.quantity, line.discount) ||
+            line.subtotal > maxAmount - totals.subtotal ||
+            line.tax > maxAmount - totals.tax ||
+            line.discount > maxAmount - totals.discount) {
+            return {false, "The bill amounts exceed the supported range.", {}};
+        }
+        totals.subtotal += line.subtotal;
+        totals.tax += line.tax;
+        totals.discount += line.discount;
     }
 
-       int64_t sumSubtotal = 0;
-       int64_t sumTax = 0;
-       int64_t sumDiscount = 0;
-
-       for(size_t i = 0; i < items.size(); i++){
-
-        const CartItem& item = items[i];
-        const Product& prod = item.product;
-        const int64_t qty = item.quantity;
-         
-         // Validation: rates and quantity must be non-negative
-        if (qty < 0 || prod.unitPrice < 0 || prod.taxPerUnit < 0 || prod.discountPerUnit < 0) {
-            return {false, "Negative rate or quantity encountered.", {}};
-        }
-
-         // Unit discount cannot exceed unit price
-        if (prod.discountPerUnit > prod.unitPrice) {
-            return {false, "Unit discount cannot exceed unit price.", {}};
-        }
-        
-         // Count items must have quantities as integer multiples of 1000
-        if (prod.unit == Unit::Count && (qty % 1000 != 0)) {
-            return {false, "Count item quantity must be an integer multiple of 1000.", {}};
-        }
-
-        // Line subtotal (base price before tax and discount)
-        int64_t lineSubtotal = 0;
-
-        if (!multiplyAndRoundPaisa(prod.unitPrice, qty, lineSubtotal)) {
-            return {false, "Arithmetic overflow during subtotal calculation.", {}};
-        }
-
-        // Line tax (tax is based on full quantity before discount)
-        int64_t lineTax = 0;
-
-        if (!multiplyAndRoundPaisa(prod.taxPerUnit, qty, lineTax)) {
-            return {false, "Arithmetic overflow during tax calculation.", {}};
-        }
-
-         // Line discount
-        int64_t lineDiscount = 0;
-
-        if (!multiplyAndRoundPaisa(prod.discountPerUnit, qty, lineDiscount)) {
-            return {false, "Arithmetic overflow during discount calculation.", {}};
-        }
-
-        // Check for sum overflow
-        constexpr int64_t kMax = numeric_limits<int64_t>::max();
-        if (sumSubtotal > kMax - lineSubtotal || sumTax > kMax - lineTax || sumDiscount > kMax - lineDiscount) {
-            return {false, "Arithmetic overflow during totals summation.", {}};
-        }
-
-        sumSubtotal += lineSubtotal;
-        sumTax += lineTax;
-        sumDiscount += lineDiscount;
+    const auto net = totals.subtotal - totals.discount;
+    if (totals.tax > maxAmount - net) {
+        return {false, "The payable amount exceeds the supported range.", {}};
     }
-       
-    // Payable = subtotal + tax - discount
-    int64_t payable = sumSubtotal + sumTax - sumDiscount;
-    if (payable < 0) {
-        payable = 0;
-    }
-
-    Totals resultTotals;
-    resultTotals.subtotal = sumSubtotal;
-    resultTotals.tax = sumTax;
-    resultTotals.discount = sumDiscount;
-    resultTotals.payable = payable;
-
-    return {true, "Totals calculated successfully.", resultTotals};
+    totals.payable = net + totals.tax;
+    return {true, {}, totals};
 }

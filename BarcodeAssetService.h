@@ -6,6 +6,9 @@
 
 class BarcodeAssetService {
 private:
+    friend class ProductService;
+
+    std::filesystem::path imagePath(const std::string& barcode) const;
     std::filesystem::path dataRoot_;
 
 public:

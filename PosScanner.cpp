@@ -48,7 +48,8 @@ Result<ScanResult> PosScanner::poll() {
     InputResult input = source_.nextFrame();
 
     // hardware / frame capture failure
-    if (input.status == ImageStatus::CameraError || input.status == ImageStatus::ProcessingError) {
+    if (input.status != ImageStatus::Ready && input.status != ImageStatus::NoCandidate &&
+        input.status != ImageStatus::MultipleCandidates) {
         stop();
         return {false, input.message.empty() ? "Camera capture failure." : input.message, {}};
     }
@@ -58,21 +59,18 @@ Result<ScanResult> PosScanner::poll() {
 
     if (input.status == ImageStatus::Ready) {
         // Run existing custom Code 128 decoder
-        DecodeResult dec = decoder_.decode(input.barcode);
-        result.decoded = dec;
+        try {
+            result.decoded = decoder_.decode(input.barcode);
+        } catch (const cv::Exception&) {
+            stop();
+            return {false, "Could not process the barcode candidate.", {}};
+        }
 
-        if (dec.found) {
-            // codeChanged is true only when the detected barcode differs from lastCode_
-            if (dec.code != lastCode_) {
-
-                result.codeChanged = true;
-                lastCode_ = dec.code;
-            } else {
-                
-                result.codeChanged = false;
-            }
+        if (result.decoded.found) {
+            result.codeChanged = result.decoded.code != lastCode_;
+            lastCode_ = result.decoded.code;
         } else {
-            result.codeChanged = false;
+            result.decoded.code.clear();
         }
     } else {
         // No barcode or multiple candidates: normal outcome, keep camera running
@@ -82,5 +80,5 @@ Result<ScanResult> PosScanner::poll() {
         result.codeChanged = false;
     }
 
-    return {true, "Frame processed.", result};
+    return {true, result.decoded.found ? string{} : result.decoded.message, result};
 }

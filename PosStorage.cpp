@@ -55,6 +55,8 @@ namespace
 
                     if (stream.fail())
                         throw runtime_error("Invalid quoted string.");
+                    if (field.value.find_first_of("\r\n") != string::npos)
+                        throw runtime_error("String fields cannot contain line breaks.");
 
                     if (!stream.eof() &&
                         !isspace(static_cast<unsigned char>(stream.peek())))
@@ -111,26 +113,6 @@ namespace
             }
 
             return true;
-        }
-
-        int64_t parseNumber(
-            const Field &field,
-            const string &fieldName)
-        {
-            string s = removeUnquoted(field, fieldName);
-
-            if (!isNumeric(s))
-                throw runtime_error(
-                    fieldName + " must contain digits only.");
-
-            try
-            {
-                return stoll(s);
-            }
-            catch (const out_of_range &)
-            {
-                throw runtime_error(fieldName + " is out of range.");
-            }
         }
 
         // Money is stored in paisa.
@@ -495,10 +477,7 @@ namespace
     // Record marker handling & Deserializers
     // =========================================================================
 
-    vector<Field> removeRecordMarker(
-        const string &line,
-        const string &fileName,
-        int lineNumber)
+    vector<Field> removeRecordMarker(const string &line)
     {
         vector<Field> fields = slices(line);
 
@@ -695,6 +674,110 @@ namespace
         return bill;
     }
 
+    bool validTimestamp(const Timestamp &timestamp)
+    {
+        const string &date = timestamp.date;
+        const string &time = timestamp.time;
+        if (date.size() != 10 || date[4] != '-' || date[7] != '-' ||
+            time.size() != 8 || time[2] != ':' || time[5] != ':' ||
+            !isNumeric(date.substr(0, 4) + date.substr(5, 2) + date.substr(8, 2)) ||
+            !isNumeric(time.substr(0, 2) + time.substr(3, 2) + time.substr(6, 2)))
+            return false;
+
+        const int year = stoi(date.substr(0, 4));
+        const int month = stoi(date.substr(5, 2));
+        const int day = stoi(date.substr(8, 2));
+        if (year == 0 || month < 1 || month > 12 || day < 1)
+            return false;
+
+        constexpr int daysByMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+        const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        return day <= daysByMonth[month - 1] + (month == 2 && leap ? 1 : 0) &&
+            stoi(time.substr(0, 2)) < 24 && stoi(time.substr(3, 2)) < 60 &&
+            stoi(time.substr(6, 2)) < 60;
+    }
+
+    bool validBarcode(const string &barcode)
+    {
+        return barcode.size() == 6 && barcode.front() != '0' && isNumeric(barcode);
+    }
+
+    void validateSnapshot(const StoreData &data)
+    {
+        unordered_map<string, const Product *> products;
+        unordered_set<string> barcodes;
+        for (const Product &product : data.products)
+        {
+            const filesystem::path imagePath(product.barcodeImagePath);
+            if (!isNumeric(product.id) || !validBarcode(product.barcode) ||
+                trim(product.acronym).empty() || product.acronym.size() > 8 ||
+                trim(product.name).empty() || imagePath.empty() || imagePath.has_root_path() ||
+                any_of(imagePath.begin(), imagePath.end(),
+                       [](const filesystem::path &part) { return part == ".."; }) ||
+                product.available < 0 || product.unitPrice < 0 || product.taxPerUnit < 0 ||
+                product.discountPerUnit < 0 || product.discountPerUnit > product.unitPrice ||
+                (product.unit != Unit::Count && product.unit != Unit::Weight) ||
+                (product.unit == Unit::Count && product.available % 1000 != 0))
+                throw runtime_error("Invalid fields for product " + product.id + ".");
+            if (!products.emplace(product.id, &product).second)
+                throw runtime_error("Duplicate product ID.");
+            if (!barcodes.insert(product.barcode).second)
+                throw runtime_error("Duplicate barcode.");
+        }
+
+        unordered_set<string> orders;
+        unordered_set<string> bills;
+        for (const SaleRecord &sale : data.sales)
+        {
+            const SaleIds &ids = sale.ids;
+            if (!validTimestamp(sale.timestamp) ||
+                ids.orderId.size() != 8 || !isNumeric(ids.orderId) ||
+                ids.orderId.substr(6) != sale.timestamp.date.substr(8) ||
+                ids.billId.size() != 9 || !isNumeric(ids.billId))
+                throw runtime_error("Invalid date, time or IDs for order " + ids.orderId + ".");
+            if (!orders.insert(ids.orderId).second || !bills.insert(ids.billId).second)
+                throw runtime_error("Duplicate order or bill ID.");
+            if (trim(sale.customer.name).empty() || sale.lines.empty() ||
+                (sale.status != OrderStatus::OnHold && sale.status != OrderStatus::Paid &&
+                 sale.status != OrderStatus::Archived))
+                throw runtime_error("Invalid customer, items or status for order " + ids.orderId + ".");
+
+            const Totals &totals = sale.totals;
+            if (totals.subtotal < 0 || totals.tax < 0 || totals.discount < 0 ||
+                totals.discount > totals.subtotal)
+                throw runtime_error("Invalid totals for order " + ids.orderId + ".");
+            const auto net = totals.subtotal - totals.discount;
+            if (totals.tax > numeric_limits<int64_t>::max() - net || totals.payable != net + totals.tax)
+                throw runtime_error("Inconsistent payable amount for order " + ids.orderId + ".");
+
+            const Payment &payment = sale.payment;
+            if ((sale.status == OrderStatus::Paid && !payment.recorded) ||
+                (sale.status == OrderStatus::OnHold && payment.recorded) ||
+                (!payment.recorded && (payment.amount != 0 || !payment.merchant.empty())) ||
+                (payment.recorded && (payment.amount != totals.payable ||
+                    (payment.mode != PaymentMode::Cash && payment.mode != PaymentMode::Card &&
+                     payment.mode != PaymentMode::Wallet))))
+                throw runtime_error("Invalid payment for order " + ids.orderId + ".");
+
+            unordered_set<string> lineProducts;
+            for (const SaleLine &line : sale.lines)
+            {
+                if (!isNumeric(line.productId) || !validBarcode(line.barcode) ||
+                    trim(line.acronym).empty() || line.acronym.size() > 8 ||
+                    line.quantity <= 0 || line.unitPrice < 0 || line.discountPerUnit < 0 ||
+                    line.discountPerUnit > line.unitPrice || !lineProducts.insert(line.productId).second)
+                    throw runtime_error("Invalid purchase line for order " + ids.orderId + ".");
+                if (sale.status == OrderStatus::OnHold)
+                {
+                    const auto product = products.find(line.productId);
+                    if (product == products.end() || product->second->barcode != line.barcode ||
+                        (product->second->unit == Unit::Count && line.quantity % 1000 != 0))
+                        throw runtime_error("Held order " + ids.orderId + " does not match the catalogue.");
+                }
+            }
+        }
+    }
+
 } // anonymous namespace
 
 // =============================================================================
@@ -790,10 +873,7 @@ Status PosStorage::load()
 
                 try
                 {
-                    vector<Field> fields = removeRecordMarker(
-                        line,
-                        "Product.txt",
-                        lineNumber);
+                    vector<Field> fields = removeRecordMarker(line);
 
                     Product product = deserializeProduct(fields);
 
@@ -812,6 +892,8 @@ Status PosStorage::load()
                         to_string(lineNumber) + ": " + e.what());
                 }
             }
+            if (productStream.bad() || !productStream.eof())
+                throw runtime_error("Error reading Product.txt.");
         }
 
         // 2. Order.txt
@@ -833,10 +915,7 @@ Status PosStorage::load()
 
                 try
                 {
-                    vector<Field> fields = removeRecordMarker(
-                        line,
-                        "Order.txt",
-                        lineNumber);
+                    vector<Field> fields = removeRecordMarker(line);
 
                     SaleRecord sale = deserializeOrder(fields);
 
@@ -853,6 +932,8 @@ Status PosStorage::load()
                         to_string(lineNumber) + ": " + e.what());
                 }
             }
+            if (orderStream.bad() || !orderStream.eof())
+                throw runtime_error("Error reading Order.txt.");
         }
 
         // 3. OrderDetail.txt
@@ -891,6 +972,8 @@ Status PosStorage::load()
                         to_string(lineNumber) + ": " + e.what());
                 }
             }
+            if (detailStream.bad() || !detailStream.eof())
+                throw runtime_error("Error reading OrderDetail.txt.");
         }
 
         // 4. Bill.txt
@@ -912,10 +995,7 @@ Status PosStorage::load()
 
                 try
                 {
-                    vector<Field> fields = removeRecordMarker(
-                        line,
-                        "Bill.txt",
-                        lineNumber);
+                    vector<Field> fields = removeRecordMarker(line);
 
                     BillLine bill = decodeBill(fields);
 
@@ -941,6 +1021,8 @@ Status PosStorage::load()
                         to_string(lineNumber) + ": " + e.what());
                 }
             }
+            if (billStream.bad() || !billStream.eof())
+                throw runtime_error("Error reading Bill.txt.");
         }
 
         // Validate 1-to-1 relationship
@@ -1003,7 +1085,8 @@ Status PosStorage::load()
             }
         }
 
-        data_ = move(loadedData);
+        validateSnapshot(loadedData);
+        data_ = std::move(loadedData);
         loaded_ = true;
 
         return {true, "All four files loaded successfully."};
@@ -1044,9 +1127,12 @@ Status PosStorage::save(const StoreData &data)
     vector<fs::path> paths, tempPaths, backupPaths;
     vector<bool> backedUp(4, false);
     vector<bool> installed(4, false);
+    vector<bool> temporary(4, false);
 
     try
     {
+        validateSnapshot(data);
+        StoreData nextData = data;
         fs::create_directories(dataRoot_);
 
         for (const string &fileName : fileNames)
@@ -1054,6 +1140,9 @@ Status PosStorage::save(const StoreData &data)
             paths.push_back(dataRoot_ / fileName);
             tempPaths.push_back(dataRoot_ / (fileName + ".tmp"));
             backupPaths.push_back(dataRoot_ / (fileName + ".bak"));
+            if (fs::exists(tempPaths.back()) || fs::exists(backupPaths.back()) ||
+                (fs::exists(paths.back()) && !fs::is_regular_file(paths.back())))
+                throw runtime_error("Unexpected file blocking save of " + fileName + ".");
         }
 
         vector<string> productRows;
@@ -1086,6 +1175,7 @@ Status PosStorage::save(const StoreData &data)
 
         for (size_t i = 0; i < allRows.size(); ++i)
         {
+            temporary[i] = true;
             ofstream file(tempPaths[i], ios::binary | ios::trunc);
 
             if (!file.is_open())
@@ -1108,9 +1198,6 @@ Status PosStorage::save(const StoreData &data)
         {
             if (fs::exists(paths[i]))
             {
-                if (fs::exists(backupPaths[i]))
-                    fs::remove(backupPaths[i]);
-
                 fs::rename(paths[i], backupPaths[i]);
                 backedUp[i] = true;
             }
@@ -1120,8 +1207,10 @@ Status PosStorage::save(const StoreData &data)
         {
             fs::rename(tempPaths[i], paths[i]);
             installed[i] = true;
+            temporary[i] = false;
         }
 
+        data_ = std::move(nextData);
         for (size_t i = 0; i < paths.size(); ++i)
         {
             if (backedUp[i])
@@ -1131,29 +1220,40 @@ Status PosStorage::save(const StoreData &data)
             }
         }
 
-        data_ = data;
-
         return {true, "All four files saved successfully."};
     }
     catch (const exception &e)
     {
+        bool restored = true;
         for (size_t i = 0; i < paths.size(); ++i)
         {
             error_code ec;
 
             if (installed[i])
+            {
                 fs::remove(paths[i], ec);
+                restored = restored && !ec;
+            }
 
             if (backedUp[i])
             {
                 ec.clear();
                 fs::rename(backupPaths[i], paths[i], ec);
+                restored = restored && !ec;
             }
 
-            ec.clear();
-            fs::remove(tempPaths[i], ec);
+            if (temporary[i])
+            {
+                ec.clear();
+                fs::remove(tempPaths[i], ec);
+            }
         }
 
+        if (!restored)
+        {
+            loaded_ = false;
+            return {false, std::string(e.what()) + " Rollback failed. Reload and validate storage before saving."};
+        }
         return {false, e.what()};
     }
 }
