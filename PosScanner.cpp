@@ -6,7 +6,7 @@
 using namespace std;
 
 PosScanner::PosScanner(ImageSource& source, const BarcodeDecoder& decoder)
-    :source_(source), decoder_(decoder), lastCode_(""), running(0){}
+    :source_(source), decoder_(decoder), lastCode_(""), running_(false){}
 
 PosScanner::~PosScanner(){
 

@@ -37,7 +37,7 @@ string formatQuantity(Unit unit, int64_t qtyThousandths) {
 // "Insufficient stock: X already in order + Y requested exceeds Z available."
 
 string makeInsufficientStockMessage(Unit unit, int64_t inCart, int64_t requested, int64_t available) {
-    
+
     ostringstream ss;
     ss << "Insufficient stock: "
        << formatQuantity(unit, inCart) << " already in order + "
@@ -49,7 +49,7 @@ string makeInsufficientStockMessage(Unit unit, int64_t inCart, int64_t requested
 } // namespace
 
 CartService::CartService(ProductService& products, const PricingCalculator& pricing)
-    : produc ts_(products),
+    : products_(products),
       pricing_(pricing),
       items_({})
 {
