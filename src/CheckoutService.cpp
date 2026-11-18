@@ -12,7 +12,7 @@
 
 using namespace std;
 
- {
+namespace {
 
 bool hasLineBreak(const string& text)
 {

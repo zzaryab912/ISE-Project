@@ -9,7 +9,7 @@
 
 using namespace std;
 
- {
+namespace {
 
 SaleRecord* findSale(StoreData& data, const string& orderId)
 {
