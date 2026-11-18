@@ -120,7 +120,7 @@ Result<vector<SaleLine>> buildSaleLines(const vector<CartItem>& items,
             (captured.unit == Unit::Count && item.quantity % 1000 != 0)) {
             return {false, "Invalid quantity or measurement unit for " + captured.acronym + ".", {}};
         }
-        if (!products.hasStock(*live, item.quantity)) {
+        if (item.quantity >= live->available || !products.hasStock(*live, item.quantity)) {
             return {false, "Requested quantity must be less than available stock for " + captured.acronym + ".", {}};
         }
 
