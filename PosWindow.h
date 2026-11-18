@@ -4,6 +4,7 @@
 
 #include <QMainWindow>
 #include <QTimer>
+#include <optional>
 
 using namespace std;
 
@@ -17,6 +18,7 @@ class HistoryService;
 class QStackedWidget;
 class QTabWidget;
 class QWidget;
+class QImage;
 
 class PosWindow : public QMainWindow {
 private:
@@ -34,6 +36,10 @@ private:
     SaleRecord displayedBill_{};
     bool hasDisplayedBill_ = false;
     QTimer cameraTimer_{};
+    bool currentOrderOpened_ = false;
+    Status cameraStatus_{};
+    bool savingBill_ = false;
+    optional<Product> selectedCatalogueProduct_;
 
     QStackedWidget* pages_ = nullptr;       // this is the widget that holds the pages, shows one at a time
     QWidget* currentOrderPage_ = nullptr;
@@ -41,11 +47,55 @@ private:
     QWidget* cataloguePage_ = nullptr;
     QTabWidget* catalogueTabs_ = nullptr;   // these are pointers to all the pages
 
+    void stopCurrentOrderCamera();
+    void closeEvent(QCloseEvent* event) override;
+    void generateCurrentBill(OrderStatus status);
+    void displayOrder(const SaleRecord& order);
+    void refreshHistory();
+    void refreshCatalogue();
+
 public:
+    class CurrentOrderView : public QWidget {
+    public:
+        using QWidget::QWidget;
+        virtual Result<Customer> readCustomer() const = 0;
+        virtual Result<Payment> readPayment() const = 0;
+        virtual void setBillSaving(bool saving) = 0;
+        virtual void showBillError(const string& message) = 0;
+        virtual void showEmptyCart() = 0;
+    };
+
+    class OrderHistoryView : public QWidget {
+    public:
+        using QWidget::QWidget;
+        virtual Result<Payment> readPayment() const = 0;
+        virtual void showError(const string& message) = 0;
+        virtual void showOrders(const vector<SaleRecord>& orders, const string& selectedId) = 0;
+        virtual void showBill(const SaleRecord& order) = 0;
+        virtual void clearBill() = 0;
+    };
+
+    class CatalogueView : public QWidget {
+    public:
+        using QWidget::QWidget;
+        virtual string readBarcode() const = 0;
+        virtual Result<Product> readNewProduct() const = 0;
+        virtual Result<Product> readEditedProduct() const = 0;
+        virtual void showError(const string& message) = 0;
+        virtual void showProducts(const vector<Product>& products, const string& selectedId) = 0;
+        virtual void showProduct(const Product& product) = 0;
+        virtual void clearProduct() = 0;
+        virtual void showBarcodePreview(const QImage& image) = 0;
+        virtual void showSavedProduct(const Product& product) = 0;
+    };
+
     PosWindow(ProductService& products, BarcodeAssetService& images,
               CartService& cart, PosScanner& scanner,
               CheckoutService& checkout, HistoryService& history,
               QWidget* parent = nullptr);
+
+    void bindPages(QStackedWidget& pages, CurrentOrderView& currentOrder,
+                   OrderHistoryView& history, CatalogueView& catalogue, QTabWidget& catalogueTabs);
 
     void onCameraTick();                                                        // reads next frame, updates preview, looks for a new barcode
     void onAddClicked();                                                        // Asks cart to add selected product in entered quantity
