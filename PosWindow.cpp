@@ -1,5 +1,6 @@
 #include "PosWindow.h"
 #include "BarcodeAssetService.h"
+#include "BarcodePlotter.h"
 #include "CartService.h"
 #include "CheckoutService.h"
 #include "HistoryService.h"
@@ -48,24 +49,38 @@ void PosWindow::bindPages(QStackedWidget& pages, CurrentOrderView& currentOrder,
 }
 
 void PosWindow::onCameraTick() {                                        // called on each tick
+    if (!currentOrderPage_) {
+        return;
+    }
+
+    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
     const Result<ScanResult> scane = scanner_.poll();                   // poll asks scanner to read one frame and check for a barcode, returns a result object
 
     if (!scane.success) {       // stops the camera if reading the frame failed
         cameraStatus_ = {false, scane.message};
         cameraTimer_.stop();
         scanner_.stop();
+        view.showCameraPreview({});
+        view.showScannerMessage(cameraStatus_.message);
         return;
     }
 
-    if (!scane.value.decoded.found || !scane.value.codeChanged) {                           // if no new barcode is found, return, keep scanning
+    view.showCameraPreview(mat2QImage(scane.value.preview));
+    if (!scane.value.decoded.found) {                                                        // keep showing the preview while waiting for a barcode
+        view.showScannerMessage(scane.message);
+        return;
+    }
+    if (!scane.value.codeChanged) {
         return;
     }
 
     const Result<Product> product = products_.findByBarcode(scane.value.decoded.code);      // looks up barcode in the catalogue. If there is no match, selection stays as it is
     if (!product.success) {
+        view.showScannerMessage(product.message);
         return;
     }
 
+    view.showScannerMessage({});
     if (hasSelectedProduct_ && selectedProduct_.id == product.value.id) {                   // preserves teh entered quantity if lookup returns product already selected
         return;
     }
@@ -74,28 +89,67 @@ void PosWindow::onCameraTick() {                                        // calle
     selectedProduct_ = product.value;
     hasSelectedProduct_ = true;
     addQuantity_ = 0;
+    view.showScannedProduct(selectedProduct_);
+    view.resetAddQuantity();
 }
 
 // when clicking on Add to order
 void PosWindow::onAddClicked() {
-    if (!hasSelectedProduct_ || addQuantity_ <= 0) {                                        // if product isnt selected, or quantity to be added is zero or smaller
+    if (!currentOrderPage_ || !hasSelectedProduct_) {                                      // wait until a product is selected
         return;
     }
 
+    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+    const Result<int64_t> quantity = view.readAddQuantity();
+    if (!quantity.success) {
+        view.showCartError(quantity.message);
+        return;
+    }
+    addQuantity_ = quantity.value;
+
     const Status result = cart_.addByBarcode(selectedProduct_.barcode, addQuantity_);       // if add fails, it stops trying to add so cashier can change quantity manually. super neat right?
     if (!result.success) {
+        view.showCartError(result.message);
         return;
     }
 
     addQuantity_ = 0;
+    view.resetAddQuantity();
+    view.showCartError(refreshCart());
 }
 
 // updates an existing row. zero removes the row here
 void PosWindow::onCartQuantityChanged(const string& productId, int64_t quantity) {
     const Status result = cart_.setQuantity(productId, quantity);
-    if (!result.success) {
-        return;
+    if (currentOrderPage_) {
+        auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+        const string refreshError = refreshCart();
+        view.showCartError(result.success ? refreshError : result.message);
     }
+}
+
+// gets the actual rows and their amounts from the cart after a quantity change
+string PosWindow::refreshCart() {
+    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+    const vector<CartItem> items = cart_.items();
+    vector<optional<int64_t>> amounts;
+    amounts.reserve(items.size());
+    string error;
+    for (const CartItem& item : items) {
+        const Result<Totals> line = cart_.lineTotals(item.product.id);
+        if (line.success) {
+            amounts.push_back(line.value.subtotal);
+        } else {
+            amounts.push_back(nullopt);
+            if (error.empty()) {
+                error = line.message;
+            }
+        }
+    }
+
+    const Result<Totals> totals = cart_.totals();
+    view.showCart(items, amounts, totals.success ? optional<Totals>{totals.value} : nullopt);
+    return totals.success || !error.empty() ? error : totals.message;
 }
 
 // generates and saves a paid bill using the entered payment details
@@ -146,7 +200,8 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
 
     cart_.clear();
     addQuantity_ = 0;
-    view.showEmptyCart();
+    view.resetAddQuantity();
+    view.showCartError(refreshCart());
     view.setBillSaving(false);
     displayOrder(result.value);
     showPage("Order History");
@@ -156,6 +211,7 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
 void PosWindow::onOrderSelected(const string& orderId) {
     const Result<SaleRecord> result = history_.get(orderId);
     if (!result.success) {
+        clearOrderSelection();
         if (historyPage_) {
             static_cast<OrderHistoryView*>(historyPage_)->showError(result.message);
         }
@@ -173,6 +229,15 @@ void PosWindow::displayOrder(const SaleRecord& order) {
         auto& view = *static_cast<OrderHistoryView*>(historyPage_);
         view.showError({});
         view.showBill(displayedBill_);
+    }
+}
+
+void PosWindow::clearOrderSelection() {
+    selectedOrderId_.clear();
+    displayedBill_ = {};
+    hasDisplayedBill_ = false;
+    if (historyPage_) {
+        static_cast<OrderHistoryView*>(historyPage_)->clearBill();
     }
 }
 
@@ -214,11 +279,8 @@ void PosWindow::onArchiveClicked() {
         return;
     }
 
-    selectedOrderId_.clear();
-    displayedBill_ = {};
-    hasDisplayedBill_ = false;
+    clearOrderSelection();
     if (historyPage_) {
-        static_cast<OrderHistoryView*>(historyPage_)->clearBill();
         refreshHistory();
     }
 }
@@ -369,11 +431,14 @@ void PosWindow::showPage(const string& pageName) {
     pages_->setCurrentWidget(page);
 
     if (page == currentOrderPage_ && !currentOrderOpened_) {
+        auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+        view.showCartError(refreshCart());
         currentOrderOpened_ = true;
         cameraStatus_ = scanner_.start(0);
         if (cameraStatus_.success) {
             cameraTimer_.start();
         }
+        view.showScannerMessage(cameraStatus_.message);
     }
 
     if (page == historyPage_) {

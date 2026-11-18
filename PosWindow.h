@@ -51,6 +51,8 @@ private:
     void closeEvent(QCloseEvent* event) override;
     void generateCurrentBill(OrderStatus status);
     void displayOrder(const SaleRecord& order);
+    void clearOrderSelection();
+    string refreshCart();
     void refreshHistory();
     void refreshCatalogue();
 
@@ -60,9 +62,17 @@ public:
         using QWidget::QWidget;
         virtual Result<Customer> readCustomer() const = 0;
         virtual Result<Payment> readPayment() const = 0;
+        virtual Result<int64_t> readAddQuantity() const = 0;
+        virtual void showCameraPreview(const QImage& image) = 0;
+        virtual void showScannerMessage(const string& message) = 0;
+        virtual void showScannedProduct(const Product& product) = 0;
+        // resets the quantity to zero and disables Add until the next valid input
+        virtual void resetAddQuantity() = 0;
+        virtual void showCart(const vector<CartItem>& items, const vector<optional<int64_t>>& amounts,
+                              const optional<Totals>& totals) = 0;
+        virtual void showCartError(const string& message) = 0;
         virtual void setBillSaving(bool saving) = 0;
         virtual void showBillError(const string& message) = 0;
-        virtual void showEmptyCart() = 0;
     };
 
     class OrderHistoryView : public QWidget {
