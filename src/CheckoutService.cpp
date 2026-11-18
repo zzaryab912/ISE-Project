@@ -10,15 +10,17 @@
 #include <unordered_set>
 #include <utility>
 
+using namespace std;
+
 namespace {
 
-bool hasLineBreak(const std::string& text)
+bool hasLineBreak(const string& text)
 {
-    return text.find_first_of("\r\n") != std::string::npos;
+    return text.find_first_of("\r\n") != string::npos;
 }
 
 // The date and time fields passed here are at most four digits long.
-int decimalField(std::string_view field)
+int decimalField(string_view field)
 {
     int value = 0;
     for (char digit : field) {
@@ -32,8 +34,8 @@ int decimalField(std::string_view field)
 
 bool validTimestamp(const Timestamp& timestamp)
 {
-    const std::string_view date = timestamp.date;
-    const std::string_view time = timestamp.time;
+    const string_view date = timestamp.date;
+    const string_view time = timestamp.time;
     if (date.size() != 10 || date[4] != '-' || date[7] != '-' ||
         time.size() != 8 || time[2] != ':' || time[5] != ':') {
         return false;
@@ -58,7 +60,7 @@ bool validTimestamp(const Timestamp& timestamp)
            minute >= 0 && minute < 60 && second >= 0 && second < 60;
 }
 
-Status validatePayment(const Payment& payment, OrderStatus status, std::int64_t payable)
+Status validatePayment(const Payment& payment, OrderStatus status, int64_t payable)
 {
     if (status == OrderStatus::OnHold) {
         if (payment.recorded || payment.amount != 0 || !payment.merchant.empty()) {
@@ -83,13 +85,13 @@ Status validatePayment(const Payment& payment, OrderStatus status, std::int64_t 
     return {false, "Choose cash, card, or wallet as the payment mode."};
 }
 
-Result<std::vector<SaleLine>> buildSaleLines(const std::vector<CartItem>& items,
-                                           const std::vector<Product>& catalogue,
-                                           const ProductService& products)
+Result<vector<SaleLine>> buildSaleLines(const vector<CartItem>& items,
+                                       const vector<Product>& catalogue,
+                                       const ProductService& products)
 {
-    std::vector<SaleLine> lines;
+    vector<SaleLine> lines;
     lines.reserve(items.size());
-    std::unordered_set<std::string> seenProducts;
+    unordered_set<string> seenProducts;
 
     for (const CartItem& item : items) {
         const Product& captured = item.product;
@@ -103,7 +105,7 @@ Result<std::vector<SaleLine>> buildSaleLines(const std::vector<CartItem>& items,
             return {false, "The cart has multiple rows for " + captured.acronym + ".", {}};
         }
 
-        const auto live = std::find_if(
+        const auto live = find_if(
             catalogue.begin(), catalogue.end(),
             [&captured](const Product& product) { return product.id == captured.id; });
 
@@ -126,7 +128,7 @@ Result<std::vector<SaleLine>> buildSaleLines(const std::vector<CartItem>& items,
                          captured.unitPrice, captured.discountPerUnit, item.quantity});
     }
 
-    return {true, {}, std::move(lines)};
+    return {true, {}, move(lines)};
 }
 
 } // namespace
@@ -137,7 +139,7 @@ CheckoutService::CheckoutService(IPosStore& store, ProductService& products,
 {
 }
 
-Result<SaleRecord> CheckoutService::generateBill(const std::vector<CartItem>& items,
+Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items,
                                                 const Customer& customer,
                                                 const Payment& payment,
                                                 OrderStatus status,
@@ -149,7 +151,7 @@ Result<SaleRecord> CheckoutService::generateBill(const std::vector<CartItem>& it
     if (items.empty()) {
         return {false, "Add at least one item to generate a bill.", {}};
     }
-    if (customer.name.find_first_not_of(" \t\r\n\v\f") == std::string::npos) {
+    if (customer.name.find_first_not_of(" \t\r\n\v\f") == string::npos) {
         return {false, "Enter the customer's name.", {}};
     }
     if (hasLineBreak(customer.name) || hasLineBreak(customer.contact)) {
@@ -164,6 +166,7 @@ Result<SaleRecord> CheckoutService::generateBill(const std::vector<CartItem>& it
     if (!data.success) {
         return {false, "Could not read checkout data. " + data.message, {}};
     }
+
     auto lines = buildSaleLines(items, data.value.products, products_);
     if (!lines.success) {
         return {false, lines.message, {}};
@@ -174,21 +177,23 @@ Result<SaleRecord> CheckoutService::generateBill(const std::vector<CartItem>& it
     if (!totals.success) {
         return {false, "Could not calculate the bill. " + totals.message, {}};
     }
+
     const Status paymentStatus = validatePayment(payment, status, totals.value.payable);
     if (!paymentStatus.success) {
         return {false, paymentStatus.message, {}};
     }
+
     auto ids = ids_.saleIds(data.value, timestamp);
     if (!ids.success) {
         return {false, "Could not generate sale IDs. " + ids.message, {}};
     }
 
     SaleRecord sale;
-    sale.ids = std::move(ids.value);
+    sale.ids = move(ids.value);
     sale.timestamp = timestamp;
     sale.customer = customer;
     sale.status = status;
-    sale.lines = std::move(lines.value);
+    sale.lines = move(lines.value);
     sale.totals = totals.value;
 
     if (status == OrderStatus::Paid) {
@@ -205,5 +210,6 @@ Result<SaleRecord> CheckoutService::generateBill(const std::vector<CartItem>& it
     if (!saved.success) {
         return {false, "Could not save the bill. " + saved.message, {}};
     }
-    return {true, {}, std::move(sale)};
+
+    return {true, {}, move(sale)};
 }

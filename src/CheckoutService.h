@@ -2,6 +2,8 @@
 
 #include "PosTypes.h"
 
+using namespace std;
+
 class IPosStore;
 class ProductService;
 class PricingCalculator;
@@ -13,7 +15,7 @@ public:
                     const PricingCalculator& pricing, const IdGenerator& ids);
 
     // Saves a paid or held bill. The caller clears the cart after success.
-    Result<SaleRecord> generateBill(const std::vector<CartItem>& items,
+    Result<SaleRecord> generateBill(const vector<CartItem>& items,
                                    const Customer& customer,
                                    const Payment& payment,
                                    OrderStatus status,
