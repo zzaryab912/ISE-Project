@@ -22,10 +22,9 @@ The Code 128 encoder, checksum, and decoder are **written by the team from scrat
 8. [Repository Structure](#repository-structure)
 9. [UML Diagrams & Module Reference](#uml-diagrams--module-reference)
 10. [Error Handling](#error-handling)
-11. [Testing](#testing)
-12. [Design Decisions](#design-decisions)
-13. [Team](#team)
-14. [Documentation](#documentation)
+11. [Design Decisions](#design-decisions)
+12. [Team](#team)
+13. [Documentation](#documentation)
 
 ---
 
@@ -530,42 +529,6 @@ The full class dictionary, relationship list, and PlantUML / Mermaid source are 
 | **Held order's stock depleted** | `HistoryService::markPaid()` re-checks live stock. If another sale used it up, payment is rejected and the order stays `OnHold`. |
 | **Deleting a product in a held order** | `ProductService::remove()` is blocked: *"Cannot delete product referenced by an active on-hold order."* |
 | **Negative or invalid quantities** | Rejected at the input validation boundary before they reach the domain services. |
-
----
-
-## Testing
-
-The acceptance checklist below is derived from the use case flows in [`Increment2_UseCase_Specification.md`](documentation/Increment%202/Increment2_UseCase_Specification.md). Record your own results as you run them.
-
-**Scanning and cart**
-- Scan a registered barcode: name, price, and stock appear; holding it still does not reset the quantity.
-- Scan an unregistered barcode: *"Product not found in catalogue."* and the preview keeps running.
-- Add the same product twice: one merged row, never a duplicate row.
-- Request more than the available stock (including `already in cart + requested`): inline warning, cart unchanged, input preserved.
-- Use `+` / `-` on a row; reduce to `0` to remove it. Totals recalculate immediately.
-- Fractional `Weight` quantities (for example `1.5` kg) and half-paisa rounding.
-
-**Billing**
-- Generate Bill (Paid) with `Cash`, `Card`, and `Wallet`: stock is deducted, 8-digit Order ID and 9-digit Bill ID are assigned, and the three files are written with status `Paid`.
-- Generate Bill and Put on Hold: files are written with status `OnHold` and **no stock is deducted**.
-- Missing Customer Name, or a payment amount that differs from the payable total: rejected.
-- Stock depleted between adding to the cart and checkout: checkout aborts with nothing changed.
-
-**Order history**
-- Open a saved bill: it shows historical prices, even after the catalogue prices were edited.
-- Mark as Paid on a held order with stock available: status becomes `Paid`, the IDs are unchanged, and no duplicate records are created.
-- Mark as Paid after the stock was used up elsewhere: rejected, order stays `OnHold`.
-- Archive an order: it leaves the active list while its records remain in the files.
-
-**Catalogue**
-- Add a product (valid and invalid barcodes such as `012345`, `12345`, `1234567`, `123A56`, and a duplicate barcode): the barcode PNG is saved to `assets/` and the record is appended to `Product.txt`.
-- Restock an out-of-stock product: it returns to active inventory.
-- Change a product's unit, and delete a product, while an `OnHold` order references it: both blocked.
-
-**Failure handling**
-- Unavailable camera, corrupt files, and glare, blur, or tilt: should fail cleanly with a message and no made-up digits.
-
-> This README does not include recorded results for this matrix. Add them here once the team has run them.
 
 ---
 
