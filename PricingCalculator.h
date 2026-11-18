@@ -1,3 +1,4 @@
+#pragma once
 #include "PosTypes.h"
 #include <vector>
 
@@ -8,6 +9,6 @@ public:
 
     PricingCalculator() = default;
 
-    Result<Totals> calculate(const std::vector<CartItem>& items);
+    Result<Totals> calculate(const std::vector<CartItem>& items) const;
     
-}
+};

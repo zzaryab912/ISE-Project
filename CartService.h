@@ -1,3 +1,4 @@
+#pragma once
 #include "PosTypes.h"
 #include <string>
 #include <vector>
@@ -7,22 +8,27 @@ class PricingCalculator;
 
 class CartService{
 
+
+    ProductService& products_;
+    const PricingCalculator& pricing_;
+    std::vector<CartItem> items_;
+
 public:
 
   CartService(ProductService& products, const PricingCalculator& pricing);
 
-  Status AddByBarcode(const std::string& barcode, std::int64_t addition);
+  Status addByBarcode(const std::string& barcode, std::int64_t addition);
 
   Status setQuantity(const std::string& productId, std::int64_t quantity);
 
-  std::vector<CartItem> items();
+  std::vector<CartItem> items() const;
 
   //totals struct includes tax, discount, subtotal and payable (in paisas)
 
-  Result<Totals> totals();
+  Result<Totals> totals() const;
 
-  Result<Totals> lineTotals(const std::string& productId);
+  Result<Totals> lineTotals(const std::string& productId) const;
 
   void clear();
 
-}
+};

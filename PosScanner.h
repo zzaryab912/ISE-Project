@@ -1,6 +1,10 @@
+#pragma once
 #include "PosTypes.h"
 #include "ReaderContracts.h"
 #include <string>
+
+class ImageSource;
+class BarcodeDecoder;
 
 
 struct ScanResult{
@@ -9,16 +13,16 @@ struct ScanResult{
   DecodeResult decoded {};    //tells if barcode decoded
   bool codeChanged = false;   //true only if barcode different than lastCode ( last barcode string)
 
-}
+};
 
 
 class PosScanner{
 
 
-    ImageSource& source;
-    const BarcodeDecoder& decoder;     
-    std::string lastCode;          //last barcode scanned
-    bool running;                  //scanner running or not
+    ImageSource& source_;
+    const BarcodeDecoder& decoder_;     
+    std::string lastCode_;          //last barcode scanned
+    bool running_;                  //scanner running or not
 
 public:
 
@@ -31,4 +35,4 @@ public:
     Result<ScanResult> poll();
 
     void stop();
-}
+};
