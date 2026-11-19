@@ -94,6 +94,7 @@ public:
         virtual void showError(const string& message) = 0;
         virtual void showProducts(const vector<Product>& products, const string& selectedId) = 0;
         virtual void showProduct(const Product& product) = 0;
+        virtual void setHeldReference(bool) {}
         virtual void clearProduct() = 0;
         virtual void showBarcodePreview(const QImage& image) = 0;
         virtual void showSavedProduct(const Product& product) = 0;

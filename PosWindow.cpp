@@ -11,27 +11,40 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
-#include <QFormLayout>
-#include <QGroupBox>
-#include <QHeaderView>
+#include <QFileInfo>
+#include <QFontDatabase>
+#include <QGraphicsDropShadowEffect>
+#include <QGuiApplication>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QLocale>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScopedValueRollback>
+#include <QScreen>
 #include <QScrollArea>
-#include <QSignalBlocker>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QStandardPaths>
+#include <QStyle>
+#include <QStyledItemDelegate>
+#include <QSvgRenderer>
+#include <QTabBar>
 #include <QTabWidget>
-#include <QTableWidget>
-#include <QVBoxLayout>
+#include <QWindow>
 
+#include <algorithm>
+#include <array>
+#include <functional>
 #include <limits>
+#include <memory>
 
 namespace {
 
@@ -53,7 +66,7 @@ QString quantityText(int64_t value, Unit unit)
 
 Result<int64_t> fixedInput(const QString& input, int places)
 {
-    static const QRegularExpression pattern(R"(^([0-9]+)(?:\.([0-9]+))?$)");
+    static const QRegularExpression pattern(R"(^([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.([0-9]+))?$)");
     const auto match = pattern.match(input.trimmed());
     const QString fraction = match.captured(2);
     if (!match.hasMatch() || fraction.size() > places) {
@@ -61,7 +74,9 @@ Result<int64_t> fixedInput(const QString& input, int places)
                        " decimal places.", 0};
     }
     bool valid = false;
-    const auto digits = match.captured(1) + fraction.leftJustified(places, '0');
+    QString digits = match.captured(1);
+    digits.remove(',');
+    digits += fraction.leftJustified(places, '0');
     const auto value = digits.toLongLong(&valid);
     return valid ? Result<int64_t>{true, {}, value}
                  : Result<int64_t>{false, "The number is too large.", 0};
@@ -87,513 +102,1628 @@ QString statusText(OrderStatus status)
     return {};
 }
 
-QString totalsText(const Totals& totals)
-{
-    return QString("Subtotal  %1     Tax  %2     Discount  %3\nPayable  PKR %4")
-        .arg(money(totals.subtotal), money(totals.tax), money(totals.discount), money(totals.payable));
-}
+// Decorative SVGs exported from the authoritative Figma frame.
+constexpr char cameraSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Camera icon">
+<path id="Vector" d="M5.33333 9.33333H9.33333L11.3333 6.66667H20.6667L22.6667 9.33333H26.6667C27.3739 9.33333 28.0522 9.61428 28.5523 10.1144C29.0524 10.6145 29.3333 11.2928 29.3333 12V24C29.3333 24.7072 29.0524 25.3855 28.5523 25.8856C28.0522 26.3857 27.3739 26.6667 26.6667 26.6667H5.33333C4.62609 26.6667 3.94781 26.3857 3.44771 25.8856C2.94762 25.3855 2.66667 24.7072 2.66667 24V12C2.66667 11.2928 2.94762 10.6145 3.44771 10.1144C3.94781 9.61428 4.62609 9.33333 5.33333 9.33333Z" stroke-width="2" stroke="#777777"/>
+<path id="Vector_2" d="M20 17.3333C20 19.5425 18.2091 21.3333 16 21.3333C13.7909 21.3333 12 19.5425 12 17.3333C12 15.1242 13.7909 13.3333 16 13.3333C18.2091 13.3333 20 15.1242 20 17.3333Z" stroke-width="2" stroke="#777777"/>
+</g>
+</svg>)svg";
+constexpr char disclosureSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Disclosure chevron">
+<path id="Vector" d="M4 6L8 10L12 6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="#333333"/>
+</g>
+</svg>)svg";
+constexpr char closeSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle id="Close" cx="6" cy="6" r="6" fill="#FF5F57"/>
+</svg>)svg";
+constexpr char minimizeSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle id="Minimize" cx="6" cy="6" r="6" fill="#FEBC2E"/>
+</svg>)svg";
+constexpr char zoomSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle id="Zoom" cx="6" cy="6" r="6" fill="#28C840"/>
+</svg>)svg";
 
-QLabel* wrappedLabel()
-{
-    auto* label = new QLabel;
-    label->setTextFormat(Qt::PlainText);
-    label->setWordWrap(true);
-    return label;
-}
+constexpr int canvasWidth = 1784;
+constexpr int canvasHeight = 1054;
+constexpr int pageLeft = 258;
+constexpr int pageWidth = 1502;
+constexpr auto ink = "#171717";
+constexpr auto muted = "#686868";
+constexpr auto detailInk = "#242424";
+constexpr auto detailMuted = "#727272";
+constexpr auto errorInk = "#a22922";
 
-void showImage(QLabel& label, const QImage& image)
+QFont interfaceFont(int pixels, QFont::Weight weight = QFont::Normal)
 {
-    if (image.isNull()) {
-        label.clear();
-    } else {
-        label.setPixmap(QPixmap::fromImage(image).scaled(
-            label.contentsRect().size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    QFont result = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
+    result.setPixelSize(pixels);
+    result.setWeight(static_cast<QFont::Weight>(std::max(300, static_cast<int>(weight) - 65)));
+    result.setHintingPreference(QFont::PreferNoHinting);
+    if (weight == QFont::DemiBold && pixels >= 18 && pixels <= 28) {
+        result.setStretch(103);
     }
+    return result;
 }
 
-class PaymentFields final : public QGroupBox {
+QLabel* label(QWidget* parent, QRect bounds, const QString& value, int pixels = 14,
+              const char* color = ink, QFont::Weight weight = QFont::Normal,
+              Qt::Alignment alignment = Qt::AlignLeft | Qt::AlignVCenter)
+{
+    auto* widget = new QLabel(value, parent);
+    widget->setGeometry(bounds);
+    widget->setTextFormat(Qt::PlainText);
+    widget->setAlignment(alignment);
+    widget->setFont(interfaceFont(pixels, weight));
+    widget->setStyleSheet(QString("color: %1; background: transparent; border: none;").arg(color));
+    widget->setAttribute(Qt::WA_TransparentForMouseEvents);
+    return widget;
+}
+
+int wrapHeight(QLabel& widget, const QString& value, int minimum)
+{
+    widget.setWordWrap(true);
+    widget.setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    widget.setText(value);
+    widget.setToolTip(value);
+    return std::max(minimum, widget.heightForWidth(widget.width()));
+}
+
+QWidget* surface(QWidget* parent, QRect bounds, const char* fill = "#ffffff",
+                 const char* border = "#e7e7e7", int radius = 21)
+{
+    auto* widget = new QWidget(parent);
+    widget->setGeometry(bounds);
+    widget->setObjectName("posSurface");
+    widget->setAttribute(Qt::WA_StyledBackground);
+    widget->setStyleSheet(QString("QWidget#posSurface {background:%1; border:1px solid %2; border-radius:%3px;}")
+                              .arg(fill, border).arg(radius));
+    return widget;
+}
+
+void rule(QWidget* parent, int x, int y, int width, const char* color = "#e7e7e7")
+{
+    auto* line = new QWidget(parent);
+    line->setGeometry(x, y, width, 1);
+    line->setStyleSheet(QString("background:%1;").arg(color));
+    line->setAttribute(Qt::WA_TransparentForMouseEvents);
+}
+
+QString formattedMoney(int64_t value)
+{
+    return QLocale(QLocale::English, QLocale::UnitedStates).toString(value / 100) + "." +
+           QString::number(value % 100).rightJustified(2, '0');
+}
+
+QString ordinaryQuantity(int64_t value)
+{
+    QString output = fixedText(value, 1000, 3);
+    while (output.endsWith('0')) output.chop(1);
+    if (output.endsWith('.')) output.chop(1);
+    return output;
+}
+
+QString unitName(Unit unit) { return unit == Unit::Count ? "Count" : "Weight (kg)"; }
+QString unitShort(Unit unit) { return unit == Unit::Count ? "item" : "kg"; }
+
+QString availability(const Product& product)
+{
+    return quantityText(product.available, product.unit) +
+        (product.unit == Unit::Weight ? " kg" : product.available == 1000 ? " item" : " items");
+}
+
+QString dateText(const Timestamp& time)
+{
+    const auto date = QDate::fromString(text(time.date), Qt::ISODate);
+    const auto hour = QTime::fromString(text(time.time), Qt::ISODate);
+    if (!date.isValid() || !hour.isValid()) return text(time.date + " · " + time.time);
+    return QLocale::c().toString(date, "d MMM yyyy") + " · " + hour.toString("h:mm ap");
+}
+
+class SvgIcon final : public QWidget {
 public:
-    PaymentFields() : QGroupBox("Payment")
+    SvgIcon(QWidget* parent, QRect bounds, const char* svg, bool flip = false)
+        : QWidget(parent), art_(QByteArray(svg)), flip_(flip)
     {
-        auto* form = new QFormLayout(this);
-        form->addRow("Amount (PKR)", amount_);
-        mode_->addItem("Cash", static_cast<int>(PaymentMode::Cash));
-        mode_->addItem("Card", static_cast<int>(PaymentMode::Card));
-        mode_->addItem("Wallet", static_cast<int>(PaymentMode::Wallet));
-        form->addRow("Method", mode_);
-        form->addRow("Merchant (optional)", merchant_);
+        setGeometry(bounds);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
     }
 
-    void setAmount(int64_t amount) { amount_->setText(money(amount)); }
-
-    Result<Payment> read() const
+    void setFlipped(bool value)
     {
-        const auto amount = fixedInput(amount_->text(), 2);
-        if (!amount.success) return {false, "Payment amount: " + amount.message, {}};
-        return {true, {}, {true, amount.value, static_cast<PaymentMode>(mode_->currentData().toInt()),
-                            merchant_->text().trimmed().toStdString()}};
+        flip_ = value;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        if (flip_) {
+            painter.translate(width(), height());
+            painter.rotate(180);
+        }
+        art_.render(&painter, rect());
     }
 
 private:
-    QLineEdit* amount_ = new QLineEdit;
-    QComboBox* mode_ = new QComboBox;
-    QLineEdit* merchant_ = new QLineEdit;
+    QSvgRenderer art_;
+    bool flip_;
+};
+
+enum class Action { Primary, Checkout, Secondary, Text, Navigation };
+
+void markSelected(QPushButton& button, bool selected)
+{
+    button.setProperty("selected", selected);
+    button.setAccessibleDescription(selected ? "Selected" : "");
+    button.style()->unpolish(&button);
+    button.style()->polish(&button);
+    button.update();
+}
+
+QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action style = Action::Secondary)
+{
+    auto* widget = new QPushButton(title, parent);
+    widget->setGeometry(bounds);
+    widget->setCursor(Qt::PointingHandCursor);
+    widget->setFont(interfaceFont(14, style == Action::Navigation ? QFont::Normal : QFont::Medium));
+    if (style == Action::Primary || style == Action::Checkout) {
+        const auto background = style == Action::Checkout ? "#111111" : "#252525";
+        widget->setStyleSheet(QString(
+            "QPushButton { background:%1; color:white; border:1px solid transparent; border-radius:%2px; }"
+            "QPushButton:hover { background:#363636; } QPushButton:pressed { background:#080808; }"
+            "QPushButton:focus { border:1px solid #888888; }"
+            "QPushButton:disabled { background:#a0a0a0; color:white; }")
+            .arg(background).arg(style == Action::Checkout ? 14 : 8));
+    } else if (style == Action::Navigation) {
+        widget->setStyleSheet(
+            "QPushButton { text-align:left; padding-left:19px; color:#171717; border:1px solid transparent; border-radius:8px; }"
+            "QPushButton:hover { background:#f1f1f1; } QPushButton[selected=true] { background:white; }"
+            "QPushButton[primaryNav=true][selected=true] { background:#f1f1f1; }"
+            "QPushButton:focus { border-color:#878787; }");
+    } else if (style == Action::Text) {
+        widget->setStyleSheet(
+            "QPushButton { text-align:left; color:#727272; border:1px solid transparent; background:transparent; }"
+            "QPushButton[selected=true], QPushButton:hover { color:#242424; } QPushButton:focus { border-color:#878787; }");
+    } else {
+        widget->setStyleSheet(
+            "QPushButton { color:#242424; background:white; border:1px solid #e7e7e7; border-radius:8px; }"
+            "QPushButton:hover { background:#f6f6f6; } QPushButton:pressed { background:#ededed; }"
+            "QPushButton:focus { border-color:#878787; }"
+            "QPushButton:disabled { color:#919191; border-color:#eeeeee; }");
+    }
+    return widget;
+}
+
+QLineEdit* edit(QWidget* parent, QRect bounds, const QString& title, const QString& hint = {},
+                bool readOnly = false, bool white = false)
+{
+    auto* widget = new QLineEdit(parent);
+    widget->setGeometry(bounds);
+    widget->setAccessibleName(title);
+    widget->setPlaceholderText(hint);
+    widget->setReadOnly(readOnly);
+    widget->setFont(interfaceFont(14));
+    widget->setStyleSheet(QString(
+        "QLineEdit { color:#242424; background:%1; border:1px solid %2; border-radius:8px; padding:0 12px; }"
+        "QLineEdit:focus { border-color:#858585; }"
+        "QLineEdit:disabled { color:#777777; background:#f2f2f2; }")
+        .arg(readOnly ? "#f2f2f2" : white ? "#ffffff" : "#fafafa",
+             white ? "#d6d6d6" : "#e7e7e7"));
+    return widget;
+}
+
+QLineEdit* field(QWidget* parent, int x, int y, int width, const QString& title,
+                 const QString& value = {}, bool readOnly = false, QLabel** caption = nullptr)
+{
+    auto* titleLabel = label(parent, {x, y, width, 16}, title, 13, detailInk);
+    if (caption) *caption = titleLabel;
+    auto* widget = edit(parent, {x, y + 21, width, 39}, title, {}, readOnly);
+    widget->setText(value);
+    return widget;
+}
+
+class ChoiceRows final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override
+    {
+        return {0, 40};
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        const bool chosen = index.data(Qt::UserRole).toBool();
+        const bool highlighted = option.state & (QStyle::State_Selected | QStyle::State_MouseOver);
+        const QRect row = option.rect.adjusted(0, 1, 0, -1);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        if (chosen || highlighted) {
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(QColor(chosen ? "#e9e9e9" : "#efefef"));
+            painter->drawRoundedRect(row, 7, 7);
+        }
+        painter->setPen(QColor(ink));
+        painter->setFont(interfaceFont(14, chosen ? QFont::Medium : QFont::Normal));
+        painter->drawText(row.adjusted(11, 0, -32, 0), Qt::AlignVCenter,
+                          index.data(Qt::DisplayRole).toString());
+        if (chosen) {
+            const QPointF end(row.right() - 15, row.center().y() - 4);
+            QPainterPath tick;
+            tick.moveTo(end + QPointF(-9, 5));
+            tick.lineTo(end + QPointF(-6, 8));
+            tick.lineTo(end);
+            painter->setPen(QPen(QColor(ink), 1.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->drawPath(tick);
+        }
+        painter->restore();
+    }
+};
+
+class ChoiceBox final : public QComboBox {
+public:
+    explicit ChoiceBox(QWidget* parent) : QComboBox(parent)
+    {
+        setStyleSheet(
+            "QComboBox { color:#242424; background:#fafafa; border:1px solid #e7e7e7;"
+            " border-radius:9px; padding:0 12px; } QComboBox:disabled { background:#f2f2f2; }"
+            "QComboBox:focus { border-color:#858585; }"
+            "QComboBox[menuOpen=true] { border:2px solid #171717; padding-left:11px; }"
+            "QComboBox::drop-down { border:0; width:30px; }"
+            "QComboBox::down-arrow { image:none; width:0; height:0; }");
+    }
+
+    void showPopup() override
+    {
+        if (count() == 0 || !isEnabled()) return;
+        if (!popup_) createPopup();
+        rows_->clear();
+        for (int index = 0; index < count(); ++index) {
+            auto* row = new QListWidgetItem(itemText(index), rows_);
+            row->setData(Qt::UserRole, index == currentIndex());
+        }
+        rows_->setCurrentRow(currentIndex());
+        const int bodyHeight = count() * 40 + 14;
+        popup_->resize(width() + 2 * shadowInset, bodyHeight + 2 * shadowInset);
+        body_->setGeometry(shadowInset, shadowInset, width(), bodyHeight);
+        rows_->setGeometry(6, 6, width() - 12, bodyHeight - 12);
+
+        QPoint position = mapToGlobal(QPoint(0, height() + 5));
+        if (const auto* screen = QGuiApplication::screenAt(position)) {
+            const QRect available = screen->availableGeometry();
+            if (position.y() + bodyHeight > available.bottom())
+                position = mapToGlobal(QPoint(0, -bodyHeight - 5));
+        }
+        popup_->move(position - QPoint(shadowInset, shadowInset));
+        setMenuOpen(true);
+        popup_->show();
+        rows_->setFocus(Qt::PopupFocusReason);
+    }
+
+    void hidePopup() override
+    {
+        if (popup_) popup_->hide();
+        QComboBox::hidePopup();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QComboBox::paintEvent(event);
+        if (!isEnabled()) return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor(ink), 1.35, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const QPointF center(width() - 20, height() / 2.0);
+        const int direction = menuOpen_ ? 1 : -1;
+        QPainterPath arrow;
+        arrow.moveTo(center + QPointF(-4, direction * 2));
+        arrow.lineTo(center + QPointF(0, -direction * 2));
+        arrow.lineTo(center + QPointF(4, direction * 2));
+        painter.drawPath(arrow);
+    }
+
+    bool eventFilter(QObject* source, QEvent* event) override
+    {
+        if (source == popup_ && event->type() == QEvent::Hide) {
+            setMenuOpen(false);
+            QComboBox::hidePopup();
+        }
+        if (source == rows_ && event->type() == QEvent::KeyPress) {
+            const int key = static_cast<QKeyEvent*>(event)->key();
+            if (key == Qt::Key_Escape) {
+                hidePopup();
+                return true;
+            }
+            if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Space) {
+                selectRow();
+                return true;
+            }
+        }
+        return QComboBox::eventFilter(source, event);
+    }
+
+private:
+    static constexpr int shadowInset = 12;
+
+    void setMenuOpen(bool open)
+    {
+        menuOpen_ = open;
+        setProperty("menuOpen", open);
+        style()->unpolish(this);
+        style()->polish(this);
+        update();
+    }
+
+    void selectRow()
+    {
+        const int index = rows_->currentRow();
+        if (index >= 0) {
+            setCurrentIndex(index);
+            emit activated(index);
+        }
+        hidePopup();
+    }
+
+    void createPopup()
+    {
+        popup_ = new QWidget(this, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+        popup_->setAttribute(Qt::WA_TranslucentBackground);
+        popup_->installEventFilter(this);
+        body_ = surface(popup_, {}, "#f7f7f7", "#e4e4e4", 10);
+        auto* shadow = new QGraphicsDropShadowEffect(body_);
+        shadow->setBlurRadius(19);
+        shadow->setOffset(0, 3);
+        shadow->setColor(QColor(0, 0, 0, 32));
+        body_->setGraphicsEffect(shadow);
+        rows_ = new QListWidget(body_);
+        rows_->setAccessibleName(accessibleName() + " options");
+        rows_->setFrameShape(QFrame::NoFrame);
+        rows_->setMouseTracking(true);
+        rows_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        rows_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        rows_->setUniformItemSizes(true);
+        rows_->setStyleSheet("QListWidget {background:transparent; border:none; outline:none;}");
+        rows_->setItemDelegate(new ChoiceRows(rows_));
+        rows_->installEventFilter(this);
+        connect(rows_, &QListWidget::itemClicked, this, [this] { selectRow(); });
+    }
+
+    QWidget* popup_ = nullptr;
+    QWidget* body_ = nullptr;
+    QListWidget* rows_ = nullptr;
+    bool menuOpen_ = false;
+};
+
+QComboBox* selector(QWidget* parent, QRect bounds, const QString& title)
+{
+    auto* widget = new ChoiceBox(parent);
+    widget->setGeometry(bounds);
+    widget->setFont(interfaceFont(14));
+    widget->setAccessibleName(title);
+    return widget;
+}
+
+QScrollArea* viewport(QWidget* parent, QRect bounds)
+{
+    auto* widget = new QScrollArea(parent);
+    bounds.setWidth(bounds.width() + 7);
+    widget->setGeometry(bounds);
+    widget->setFrameShape(QFrame::NoFrame);
+    widget->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    widget->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    widget->setStyleSheet(
+        "QScrollArea { background:transparent; border:none; }"
+        "QScrollBar:vertical { width:7px; background:transparent; }"
+        "QScrollBar::handle:vertical { background:#d2d2d2; min-height:25px; border-radius:3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }");
+    widget->viewport()->setAutoFillBackground(false);
+    return widget;
+}
+
+QWidget* newRows(QScrollArea& area, int width)
+{
+    const int y = area.verticalScrollBar()->value();
+    if (auto* old = area.takeWidget()) {
+        old->hide();
+        old->deleteLater();
+    }
+    auto* rows = new QWidget;
+    rows->setAutoFillBackground(false);
+    rows->setAttribute(Qt::WA_NoSystemBackground);
+    rows->setFixedSize(width, 1);
+    area.setWidget(rows);
+    rows->setAutoFillBackground(false);
+    rows->hide();
+    rows->setProperty("previousScroll", y);
+    return rows;
+}
+
+void finishRows(QScrollArea& area, QWidget& rows, int height)
+{
+    rows.setFixedHeight(std::max(1, height));
+    rows.show();
+    area.verticalScrollBar()->setValue(rows.property("previousScroll").toInt());
+}
+
+class CameraFeed final : public QWidget {
+public:
+    CameraFeed(QWidget* parent, QRect bounds) : QWidget(parent)
+    {
+        setGeometry(bounds);
+        setAccessibleName("Camera preview");
+    }
+
+    void setFrame(const QImage& frame)
+    {
+        frame_ = frame;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+        QRectF bounds(rect());
+        if (!frame_.isNull()) {
+            QSizeF fitted(frame_.size());
+            fitted.scale(bounds.size(), Qt::KeepAspectRatio);
+            bounds.setSize(fitted);
+            bounds.moveCenter(QRectF(rect()).center());
+        }
+        QPainterPath clip;
+        clip.addRoundedRect(bounds, 10, 10);
+        painter.setClipPath(clip);
+        if (frame_.isNull()) painter.fillRect(bounds, QColor("#f1f1f1"));
+        else painter.drawImage(bounds, frame_);
+    }
+
+private:
+    QImage frame_;
+};
+
+class BarcodeDisplay final {
+public:
+    BarcodeDisplay(QWidget* parent, int x, int y)
+    {
+        bars_ = label(parent, {x, y, 242, 80}, {}, 14, detailInk, QFont::Normal, Qt::AlignCenter);
+        digits_ = label(parent, {x, y + 86, 242, 17}, {}, 14, detailInk, QFont::Normal, Qt::AlignCenter);
+    }
+
+    void set(const QImage& image, const QString& barcode = {})
+    {
+        if (image.isNull()) {
+            bars_->clear();
+            digits_->clear();
+            return;
+        }
+        // Managed PNGs use the renderer's fixed top margin and bar height.
+        const auto bars = image.width() == CODED_STRING_LENGTH * MODULE_WIDTH &&
+                          image.height() >= TOP_MARGIN + BARCODE_HEIGHT
+            ? image.copy(0, TOP_MARGIN, image.width(), BARCODE_HEIGHT) : image;
+        const qreal density = bars_->devicePixelRatioF();
+        QPixmap pixels = QPixmap::fromImage(bars.scaled(bars_->size() * density, Qt::IgnoreAspectRatio,
+                                                       Qt::FastTransformation));
+        pixels.setDevicePixelRatio(density);
+        bars_->setPixmap(pixels);
+        digits_->setText(barcode);
+    }
+
+private:
+    QLabel* bars_ = nullptr;
+    QLabel* digits_ = nullptr;
+};
+
+class PaymentFields final {
+public:
+    PaymentFields(QWidget* parent, int x, int y, int width, int gap, int merchantWidth,
+                  const QString& merchantName)
+    {
+        amount = field(parent, x, y, width, "Payment amount (PKR)");
+        amount->setPlaceholderText("Enter exact amount");
+        const int modeX = x + width + gap;
+        label(parent, {modeX, y, width, 16}, "Payment mode", 13, detailInk);
+        mode = selector(parent, {modeX, y + 21, width, 39}, "Payment mode");
+        mode->addItem("Cash", static_cast<int>(PaymentMode::Cash));
+        mode->addItem("Card", static_cast<int>(PaymentMode::Card));
+        mode->addItem("Wallet", static_cast<int>(PaymentMode::Wallet));
+        merchant = field(parent, modeX + width + gap, y, merchantWidth, merchantName);
+        merchant->setPlaceholderText(merchantName == "Merchant" ? "—" : "Enter merchant");
+    }
+
+    Result<Payment> read() const
+    {
+        const auto parsed = fixedInput(amount->text(), 2);
+        if (!parsed.success) return {false, "Payment amount: " + parsed.message, {}};
+        return {true, {}, {true, parsed.value, static_cast<PaymentMode>(mode->currentData().toInt()),
+                            merchant->text().trimmed().toStdString()}};
+    }
+
+    void setAmount(int64_t money) { amount->setText(formattedMoney(money)); }
+    void clearAmount() { amount->clear(); }
+
+private:
+    QLineEdit* amount = nullptr;
+    QComboBox* mode = nullptr;
+    QLineEdit* merchant = nullptr;
+};
+
+class QuantityStepper final : public QWidget {
+public:
+    QuantityStepper(QWidget* parent, QRect bounds)
+        : QWidget(parent)
+    {
+        setGeometry(bounds);
+        setObjectName("quantityStepper");
+        setAttribute(Qt::WA_StyledBackground);
+        setStyleSheet("QWidget#quantityStepper {background:white; border:1px solid #dadada; border-radius:8px;}");
+        const int third = bounds.width() / 3;
+        const auto stepButton = [this, third, bounds](const QString& title, int x) {
+            auto* widget = action(this, {x, 1, third, bounds.height() - 2}, title, Action::Text);
+            widget->setFont(interfaceFont(17));
+            widget->setStyleSheet(
+                "QPushButton { background:transparent; border:1px solid transparent; color:#171717; }"
+                "QPushButton:hover { background:#f1f1f1; } QPushButton:disabled { color:#aaaaaa; }"
+                "QPushButton:focus { border-color:#858585; }");
+            return widget;
+        };
+        less_ = stepButton("−", 1);
+        more_ = stepButton("+", third * 2);
+        less_->setAccessibleName("Decrease quantity");
+        more_->setAccessibleName("Increase quantity");
+        value_ = new QLineEdit(this);
+        value_->setGeometry(third, 1, third + 1, bounds.height() - 2);
+        value_->setFont(interfaceFont(13, QFont::Normal));
+        value_->setAlignment(Qt::AlignCenter);
+        value_->setAccessibleName("Quantity");
+        value_->setStyleSheet(
+            "QLineEdit { background:transparent; color:#171717; padding:0; border:none;"
+            " border-left:1px solid #e7e7e7; border-right:1px solid #e7e7e7; }"
+            "QLineEdit:focus { border:1px solid #858585; }");
+        connect(less_, &QPushButton::clicked, this, [this] { moveBy(-1); });
+        connect(more_, &QPushButton::clicked, this, [this] { moveBy(1); });
+        connect(value_, &QLineEdit::textEdited, this, [this] {
+            if (typing) typing();
+        });
+        connect(value_, &QLineEdit::editingFinished, this, [this] {
+            const auto value = read();
+            if (value.success && value.value != quantity_) {
+                quantity_ = value.value;
+                if (changed) changed(quantity_);
+            } else if (!value.success && invalid) {
+                invalid(value.message);
+            }
+        });
+        setQuantity(0, Unit::Count);
+    }
+
+    void setQuantity(int64_t value, Unit unit)
+    {
+        quantity_ = value;
+        unit_ = unit;
+        value_->setText(quantityText(value, unit));
+        value_->setFont(interfaceFont(unit == Unit::Weight ? 12 : 14, QFont::Medium));
+    }
+
+    Result<int64_t> read() const { return quantityInput(value_->text(), unit_); }
+
+    std::function<void(int64_t)> changed;
+    std::function<void()> typing;
+    std::function<void(const string&)> invalid;
+
+private:
+    void moveBy(int direction)
+    {
+        const auto value = read();
+        if (!value.success) {
+            if (invalid) invalid(value.message);
+            return;
+        }
+        const int64_t step = unit_ == Unit::Count ? 1000 : 1;
+        if (direction > 0 && value.value > std::numeric_limits<int64_t>::max() - step) {
+            if (invalid) invalid("The quantity is too large.");
+            return;
+        }
+        const auto updated = std::max<int64_t>(0, value.value + direction * step);
+        setQuantity(updated, unit_);
+        if (changed) changed(updated);
+    }
+
+    QPushButton* less_ = nullptr;
+    QPushButton* more_ = nullptr;
+    QLineEdit* value_ = nullptr;
+    Unit unit_ = Unit::Count;
+    int64_t quantity_ = 0;
 };
 
 class CurrentOrderPage final : public PosWindow::CurrentOrderView {
 public:
-    explicit CurrentOrderPage(PosWindow& window)
+    explicit CurrentOrderPage(PosWindow& window) : window_(window)
     {
-        auto* body = new QHBoxLayout(this);
-        auto* cart = new QVBoxLayout;
-        body->addLayout(cart, 3);
-        cart->addWidget(new QLabel("Current Order"));
-        table_->setHorizontalHeaderLabels({"Product", "Unit", "Quantity", "Amount (PKR)"});
-        table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-        table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-        table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-        table_->setSelectionMode(QAbstractItemView::SingleSelection);
-        table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        cart->addWidget(table_, 1);
+        auto* heading = label(this, {0, -1, 520, 42}, "Current Order", 36, ink, QFont::Medium);
+        auto headingFont = heading->font();
+        headingFont.setStretch(99);
+        heading->setFont(headingFont);
+        label(this, {0, 42, 520, 17}, "Scan products to build your order", 14, muted);
+        auto* order = surface(this, {0, 88, 998, 870}, "#ffffff", "#e3e3e3");
+        label(order, {28, 26, 300, 24}, "Order items", 20, ink, QFont::DemiBold);
+        count_ = label(order, {28, 56, 600, 16}, {}, 13, muted);
+        label(order, {750, 35, 220, 16}, "All prices in PKR", 13, muted, QFont::Normal, right_);
+        const QStringList captions{"Bill ID", "Order ID", "Status"};
+        const QStringList values{"—", "—", "In progress"};
+        for (int i = 0; i < captions.size(); ++i) {
+            label(order, {28 + 172 * i, 100, 150, 14}, captions[i], 12, muted);
+            label(order, {28 + 172 * i, 120, 150, 17}, values[i]);
+        }
+        label(order, {574, 92, 380, 14}, "Customer name", 12, muted);
+        name_ = edit(order, {574, 113, 396, 38}, "Customer name", "Enter customer name", false, true);
+        label(order, {28, 190, 314, 17}, "Product", 14, muted, QFont::Medium);
+        label(order, {366, 190, 114, 17}, "Unit price", 14, muted, QFont::Medium, right_);
+        label(order, {366, 211, 114, 13}, "(excl. tax)", 11, muted, QFont::Normal, right_);
+        label(order, {500, 190, 118, 17}, "Discount / unit", 14, muted, QFont::Medium, right_);
+        label(order, {642, 190, 176, 17}, "Quantity", 14, muted, QFont::Medium, Qt::AlignCenter);
+        label(order, {842, 190, 128, 17}, "Amount", 14, muted, QFont::Medium, right_);
+        label(order, {810, 211, 160, 13}, "Before tax & discounts", 11, muted, QFont::Normal, right_);
+        rule(order, 28, 233, 942, "#e3e3e3");
+        rows_ = viewport(order, {28, 234, 942, 288});
+        label(order, {28, 536, 210, 16}, "Contact (optional)", 13);
+        contact_ = edit(order, {28, 557, 210, 39}, "Contact (optional)", "Enter contact");
+        payment_ = std::make_unique<PaymentFields>(order, 256, 536, 210, 18, 258, "Merchant name");
+        billError_ = label(order, {28, 501, 942, 30}, {}, 14, muted);
+        billError_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        billError_->setWordWrap(true);
+        rule(order, 28, 621, 942, "#e3e3e3");
+        const QStringList totals{"Subtotal (before tax & discounts)", "Total tax", "Total discount"};
+        for (int i = 0; i < totals.size(); ++i) {
+            label(order, {28, 642 + i * 27, 480, 17}, totals[i], 14, muted);
+            totals_[i] = label(order, {760, 642 + i * 27, 210, 17}, {}, 14, ink, QFont::Normal, right_);
+        }
+        rule(order, 28, 731, 942, "#e3e3e3");
+        label(order, {28, 753, 220, 24}, "Total payable", 20, ink, QFont::DemiBold);
+        totals_[3] = label(order, {650, 753, 320, 24}, {}, 20, ink, QFont::Bold, right_);
+        pay_ = action(order, {28, 801, 455, 44}, "Generate Bill", Action::Checkout);
+        hold_ = action(order, {515, 801, 455, 44}, "Generate Bill and Put on Hold", Action::Checkout);
 
-        auto* adjust = new QHBoxLayout;
-        auto* change = new QPushButton("Set quantity");
-        auto* remove = new QPushButton("Remove");
-        adjust->addWidget(rowQuantity_);
-        adjust->addWidget(change);
-        adjust->addWidget(remove);
-        cart->addLayout(adjust);
-        cart->addWidget(cartError_);
-        cart->addWidget(totals_);
+        auto* camera = surface(this, {1022, 0, 480, 350}, "#ffffff", "#e3e3e3");
+        label(camera, {24, 24, 350, 24}, "Camera", 20, ink, QFont::DemiBold);
+        label(camera, {24, 54, 350, 16}, "Camera preview", 13, muted);
+        preview_ = new CameraFeed(camera, {24, 88, 432, 202});
+        cameraIcon_ = new SvgIcon(preview_, {200, 62, 32, 32}, cameraSvg);
+        previewStatus_ = label(preview_, {12, 110, 408, 32}, "Waiting for a barcode…",
+                               13, muted, QFont::Medium, Qt::AlignHCenter | Qt::AlignTop);
+        previewStatus_->setWordWrap(true);
+        scannerMessage_ = label(camera, {24, 311, 432, 16}, "Scanning while Current Order is open", 13, muted);
 
-        auto* customer = new QFormLayout;
-        customer->addRow("Customer name", name_);
-        customer->addRow("Contact (optional)", contact_);
-        cart->addLayout(customer);
-        cart->addWidget(payment_);
-        cart->addWidget(billError_);
-        auto* checkout = new QHBoxLayout;
-        checkout->addWidget(pay_);
-        checkout->addWidget(hold_);
-        cart->addLayout(checkout);
-
-        auto* scanner = new QVBoxLayout;
-        body->addLayout(scanner, 2);
-        scanner->addWidget(new QLabel("Camera"));
-        preview_->setMinimumHeight(170);
-        preview_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-        preview_->setAlignment(Qt::AlignCenter);
-        preview_->setStyleSheet("background: #18243a; color: white;");
-        scanner->addWidget(preview_, 1);
-        scanner->addWidget(scannerMessage_);
-        scanner->addWidget(productName_);
-        auto* addForm = new QFormLayout;
-        addForm->addRow("Quantity to add", addQuantity_);
-        scanner->addLayout(addForm);
-        auto* description = description_;
-        description->setCheckable(true);
-        description->setEnabled(false);
-        scanner->addWidget(description);
-        scanner->addWidget(specifications_);
-        specifications_->hide();
-        scanner->addWidget(add_);
-        productName_->setText("Scan a product to start.");
-        addQuantity_->setEnabled(false);
+        auto* product = surface(this, {1022, 370, 480, 588}, "#ffffff", "#e3e3e3");
+        label(product, {24, 24, 430, 24}, "Scanned product", 20, ink, QFont::DemiBold);
+        productName_ = label(product, {24, 68, 432, 39}, "Scan a barcode to select a product.",
+                             18, ink, QFont::DemiBold, Qt::AlignLeft | Qt::AlignTop);
+        productName_->setWordWrap(true);
+        productPriceLabel_ = label(product, {24, 110, 215, 17}, "Price / item (excl. tax)", 14, muted);
+        productPrice_ = label(product, {260, 110, 196, 17}, "—", 14, ink, QFont::Medium, right_);
+        quantityLabel_ = label(product, {24, 164, 235, 17}, "Quantity", 14, ink, QFont::Medium);
+        quantity_ = new QuantityStepper(product, {344, 154, 112, 36});
+        quantity_->setEnabled(false);
+        description_ = action(product, {24, 212, 432, 42}, "Description");
+        description_->setCheckable(true);
+        description_->setEnabled(false);
+        description_->setFont(interfaceFont(14, QFont::Medium));
+        description_->setStyleSheet(
+            "QPushButton { background:white; border:1px solid #dadada; border-radius:8px; text-align:left;"
+            " padding-left:13px; color:#171717; } QPushButton:hover {background:#f7f7f7;}"
+            " QPushButton:focus {border-color:#858585;} QPushButton:disabled {color:#888888;}");
+        disclosure_ = new SvgIcon(description_, {400, 13, 16, 16}, disclosureSvg);
+        specsViewport_ = viewport(product, {24, 266, 432, 200});
+        auto* specsContent = new QWidget;
+        specsContent->setAttribute(Qt::WA_NoSystemBackground);
+        specsContent->setFixedWidth(432);
+        specs_ = label(specsContent, {12, 7, 408, 136}, {}, 14, muted);
+        specsViewport_->setWidget(specsContent);
+        specsContent->setAutoFillBackground(false);
+        specsViewport_->hide();
+        cartError_ = label(product, {24, 479, 432, 39}, {}, 13, errorInk);
+        cartError_->setWordWrap(true);
+        add_ = action(product, {24, 520, 432, 44}, "Add to Order", Action::Checkout);
         add_->setEnabled(false);
-        rowQuantity_->setEnabled(false);
-        change->setEnabled(false);
-        remove->setEnabled(false);
+        showSelectionControls(false);
         setBillSaving(false);
 
-        connect(description, &QPushButton::toggled, specifications_, &QLabel::setVisible);
-        connect(addQuantity_, &QLineEdit::textChanged, this, [this] {
-            const auto quantity = readAddQuantity();
-            add_->setEnabled(quantity.success);
+        connect(description_, &QPushButton::toggled, this, [this](bool open) {
+            specsViewport_->setVisible(open);
+            disclosure_->setFlipped(open);
         });
+        const auto updateAdd = [this] {
+            const auto amount = readAddQuantity();
+            add_->setEnabled(amount.success && selected_ && selected_->available > 0);
+        };
+        quantity_->changed = [updateAdd](int64_t) { updateAdd(); };
+        quantity_->typing = updateAdd;
+        quantity_->invalid = [this](const string& error) { showCartError(error); };
         connect(add_, &QPushButton::clicked, &window, &PosWindow::onAddClicked);
         connect(pay_, &QPushButton::clicked, &window, &PosWindow::onGenerateBillClicked);
         connect(hold_, &QPushButton::clicked, &window, &PosWindow::onGenerateAndHoldClicked);
-        connect(table_, &QTableWidget::itemSelectionChanged, this, [this, change, remove] {
-            const int row = table_->currentRow();
-            const auto* quantity = row >= 0 ? table_->item(row, 2) : nullptr;
-            const bool selected = quantity && quantity->isSelected();
-            rowQuantity_->setEnabled(selected);
-            change->setEnabled(selected);
-            remove->setEnabled(selected);
-            rowQuantity_->setText(selected ? quantity->text() : QString{});
-        });
-        connect(change, &QPushButton::clicked, this, [this, &window] {
-            const int row = table_->currentRow();
-            if (row < 0 || row >= static_cast<int>(items_.size())) return;
-            const Product product = items_[row].product;
-            const auto quantity = quantityInput(rowQuantity_->text(), product.unit);
-            if (!quantity.success) {
-                showCartError(quantity.message);
-                return;
-            }
-            window.onCartQuantityChanged(product.id, quantity.value);
-        });
-        connect(remove, &QPushButton::clicked, this, [this, &window] {
-            const int row = table_->currentRow();
-            if (row < 0 || row >= static_cast<int>(items_.size())) return;
-            const string id = items_[row].product.id;
-            window.onCartQuantityChanged(id, 0);
-        });
     }
 
     Result<Customer> readCustomer() const override
     {
-        const QString name = name_->text().trimmed();
+        const auto name = name_->text().trimmed();
         if (name.isEmpty()) return {false, "Enter the customer's name.", {}};
         return {true, {}, {name.toStdString(), contact_->text().trimmed().toStdString()}};
     }
+
     Result<Payment> readPayment() const override { return payment_->read(); }
+
     Result<int64_t> readAddQuantity() const override
     {
-        const auto checked = quantityInput(addQuantity_->text(), selectedUnit_);
-        if (!checked.success) return checked;
-        if (checked.value == 0) return {false, "Enter a positive quantity.", 0};
-        return checked;
+        const auto amount = quantity_->read();
+        if (!amount.success) return amount;
+        if (amount.value == 0) return {false, "Enter a positive quantity.", 0};
+        return amount;
     }
-    void showCameraPreview(const QImage& image) override { showImage(*preview_, image); }
-    void showScannerMessage(const string& message) override { scannerMessage_->setText(text(message)); }
+
+    void showCameraPreview(const QImage& image) override
+    {
+        preview_->setFrame(image);
+        cameraIcon_->setVisible(image.isNull());
+        previewStatus_->setVisible(image.isNull());
+        hasPreview_ = !image.isNull();
+    }
+
+    void showScannerMessage(const string& message) override
+    {
+        if (hasPreview_) {
+            scannerMessage_->setText(message.empty() || message == "No barcode found."
+                                     ? "Scanning while Current Order is open" : text(message));
+        } else {
+            const bool waiting = message.empty() || message == "Camera scanner started." ||
+                                 message == "Waiting for a barcode…";
+            previewStatus_->setText(waiting ? "Waiting for a barcode…" : text(message));
+            scannerMessage_->setText(waiting ? "Scanning while Current Order is open" : "");
+        }
+    }
+
     void showScannedProduct(const Product& product) override
     {
-        selectedUnit_ = product.unit;
-        const QString unit = product.unit == Unit::Count ? "Count" : "Weight (kg)";
-        productName_->setText(text(product.name) + " · " + text(product.barcode));
-        specifications_->setText(
-            QString("%1 · %2\nIn stock %3\nPrice PKR %4 · Tax PKR %5 · Discount PKR %6 per unit")
-                .arg(text(product.acronym), unit, quantityText(product.available, product.unit),
-                     money(product.unitPrice), money(product.taxPerUnit), money(product.discountPerUnit)));
-        addQuantity_->setEnabled(true);
-        addQuantity_->setPlaceholderText(unit);
+        selected_ = product;
+        productName_->setText(text(product.name));
+        productName_->setToolTip(text(product.name));
+        productPriceLabel_->setText("Price / " + unitShort(product.unit) + " (excl. tax)");
+        productPrice_->setText("PKR " + formattedMoney(product.unitPrice));
+        const auto info = QStringList{
+            "Product ID    " + text(product.id), "Acronym    " + text(product.acronym),
+            "Barcode    " + text(product.barcode), "Measurement unit    " + unitName(product.unit),
+            "Available stock    " + availability(product),
+            "Unit price (excl. tax)    PKR " + formattedMoney(product.unitPrice) + " / " + unitShort(product.unit),
+            "Tax per " + unitShort(product.unit) + "    PKR " + formattedMoney(product.taxPerUnit),
+            "Discount per " + unitShort(product.unit) + "    PKR " + formattedMoney(product.discountPerUnit)
+        }.join('\n');
+        const auto height = wrapHeight(*specs_, info, 136);
+        specs_->setFixedHeight(height);
+        specsViewport_->widget()->setFixedHeight(std::max(200, height + 16));
+        quantity_->setEnabled(true);
         description_->setEnabled(true);
+        showSelectionControls(true);
     }
+
     void resetAddQuantity() override
     {
-        addQuantity_->clear();
+        quantity_->setQuantity(0, selected_ ? selected_->unit : Unit::Count);
         add_->setEnabled(false);
     }
+
     void showCart(const vector<CartItem>& items, const vector<optional<int64_t>>& amounts,
                   const optional<Totals>& totals) override
     {
-        const int oldRow = table_->currentRow();
-        const string selection = oldRow >= 0 && oldRow < static_cast<int>(items_.size())
-            ? items_[oldRow].product.id : string{};
-        table_->clearContents();
-        items_ = items;
-        table_->setRowCount(static_cast<int>(items.size()));
-        int selectedRow = -1;
-        for (int row = 0; row < table_->rowCount(); ++row) {
-            const CartItem& item = items[row];
-            table_->setItem(row, 0, new QTableWidgetItem(text(item.product.name)));
-            table_->setItem(row, 1, new QTableWidgetItem(item.product.unit == Unit::Count ? "Count" : "kg"));
-            table_->setItem(row, 2, new QTableWidgetItem(quantityText(item.quantity, item.product.unit)));
-            table_->setItem(row, 3, new QTableWidgetItem(amounts[row] ? money(*amounts[row]) : QString("—")));
-            if (item.product.id == selection) selectedRow = row;
+        auto* content = newRows(*rows_, 942);
+        int y = 0;
+        long double units = 0;
+        long double kilograms = 0;
+        for (size_t i = 0; i < items.size(); ++i) {
+            const auto& item = items[i];
+            auto* row = new QWidget(content);
+            const auto& product = item.product;
+            auto* identity = label(row, {0, 14, 330, 17}, {}, 14, ink, QFont::DemiBold);
+            const int identityHeight = wrapHeight(*identity, text(product.name), 17);
+            identity->setFixedHeight(identityHeight);
+            label(row, {0, 18 + identityHeight, 330, 14}, text(product.acronym), 12, muted);
+            label(row, {0, 36 + identityHeight, 330, 16}, text(product.barcode) + " · " +
+                  unitName(product.unit), 13, muted);
+            label(row, {362, 30, 90, 17}, formattedMoney(product.unitPrice), 14, ink, QFont::Normal, right_);
+            label(row, {500, 30, 90, 17}, formattedMoney(product.discountPerUnit), 14, ink, QFont::Normal, right_);
+            auto* stepper = new QuantityStepper(row, {646, 25, 112, 36});
+            stepper->setQuantity(item.quantity, product.unit);
+            stepper->changed = [this, id = product.id](int64_t value) {
+                window_.onCartQuantityChanged(id, value);
+            };
+            stepper->invalid = [this](const string& message) { showCartError(message); };
+            const QString amount = i < amounts.size() && amounts[i] ? formattedMoney(*amounts[i]) : "—";
+            label(row, {782, 30, 160, 17}, amount, 14, ink, QFont::Medium, right_);
+            const int height = std::max(86, 69 + identityHeight);
+            row->setGeometry(0, y, 942, height);
+            rule(row, 0, height - 1, 942, "#e3e3e3");
+            y += height;
+            if (product.unit == Unit::Count) units += item.quantity / 1000;
+            else kilograms += static_cast<long double>(item.quantity) / 1000;
         }
-        table_->setCurrentCell(selectedRow, 0);
-        if (selectedRow >= 0) rowQuantity_->setText(table_->item(selectedRow, 2)->text());
-        totals_->setText(totals ? totalsText(*totals) : "Totals unavailable");
-        if (totals) payment_->setAmount(totals->payable);
+        if (items.empty()) {
+            label(content, {0, 30, 850, 18}, "Your order is empty. Scan a product to get started.", 14, muted);
+            y = 90;
+        }
+        finishRows(*rows_, *content, y);
+        count_->setText(QString("%1 %2 · %3 %4%5").arg(items.size())
+            .arg(items.size() == 1 ? "product" : "products").arg(QString::number(static_cast<double>(units), 'f', 0))
+            .arg(units == 1 ? "item" : "items")
+            .arg(" · " + QString::number(static_cast<double>(kilograms), 'f', 3) + " kg"));
+        const Totals displayed = totals.value_or(Totals{});
+        totals_[0]->setText(totals ? formattedMoney(displayed.subtotal) : "—");
+        totals_[1]->setText(totals ? formattedMoney(displayed.tax) : "—");
+        totals_[2]->setText(totals ? formattedMoney(displayed.discount) : "—");
+        totals_[3]->setText(totals ? "PKR " + formattedMoney(displayed.payable) : "—");
+        if (items.empty()) payment_->clearAmount();
+        else if (totals) payment_->setAmount(displayed.payable);
         canBill_ = !items.empty() && totals.has_value();
         setBillSaving(false);
     }
+
     void showCartError(const string& message) override { cartError_->setText(text(message)); }
-    void showBillError(const string& message) override { billError_->setText(text(message)); }
+    void showBillError(const string& message) override
+    {
+        billError_->setText(text(message));
+        updateBillFeedback();
+    }
     void setBillSaving(bool saving) override
     {
         pay_->setEnabled(!saving && canBill_);
         hold_->setEnabled(!saving && canBill_);
+        if (saving) {
+            billError_->setText("Saving order…");
+        } else if (billError_->text() == "Saving order…") {
+            billError_->clear();
+        }
+        updateBillFeedback();
     }
 
 private:
-    QTableWidget* table_ = new QTableWidget(0, 4);
-    QLabel* preview_ = wrappedLabel();
-    QLabel* scannerMessage_ = wrappedLabel();
-    QLabel* productName_ = wrappedLabel();
-    QLabel* specifications_ = wrappedLabel();
-    QLabel* cartError_ = wrappedLabel();
-    QLabel* billError_ = wrappedLabel();
-    QLabel* totals_ = wrappedLabel();
-    QLineEdit* name_ = new QLineEdit;
-    QLineEdit* contact_ = new QLineEdit;
-    QLineEdit* addQuantity_ = new QLineEdit;
-    QLineEdit* rowQuantity_ = new QLineEdit;
-    QPushButton* description_ = new QPushButton("Description");
-    QPushButton* add_ = new QPushButton("Add");
-    QPushButton* pay_ = new QPushButton("Generate Bill");
-    QPushButton* hold_ = new QPushButton("Generate Bill and Put on Hold");
-    PaymentFields* payment_ = new PaymentFields;
-    vector<CartItem> items_;
-    Unit selectedUnit_ = Unit::Count;
+    void updateBillFeedback()
+    {
+        rows_->setFixedHeight(billError_->text().isEmpty() ? 288 : 264);
+    }
+
+    void showSelectionControls(bool visible)
+    {
+        for (auto* control : std::array<QWidget*, 6>{
+                productPriceLabel_, productPrice_, quantityLabel_, quantity_, description_, add_}) {
+            control->setVisible(visible);
+        }
+    }
+
+    static constexpr auto right_ = Qt::AlignRight | Qt::AlignVCenter;
+    PosWindow& window_;
+    QScrollArea* rows_ = nullptr;
+    QScrollArea* specsViewport_ = nullptr;
+    QLabel* count_ = nullptr;
+    CameraFeed* preview_ = nullptr;
+    QLabel* previewStatus_ = nullptr;
+    QLabel* scannerMessage_ = nullptr;
+    QLabel* productName_ = nullptr;
+    QLabel* productPriceLabel_ = nullptr;
+    QLabel* productPrice_ = nullptr;
+    QLabel* quantityLabel_ = nullptr;
+    QLabel* specs_ = nullptr;
+    QLabel* cartError_ = nullptr;
+    QLabel* billError_ = nullptr;
+    std::array<QLabel*, 4> totals_{};
+    SvgIcon* cameraIcon_ = nullptr;
+    SvgIcon* disclosure_ = nullptr;
+    QLineEdit* name_ = nullptr;
+    QLineEdit* contact_ = nullptr;
+    QuantityStepper* quantity_ = nullptr;
+    QPushButton* description_ = nullptr;
+    QPushButton* add_ = nullptr;
+    QPushButton* pay_ = nullptr;
+    QPushButton* hold_ = nullptr;
+    std::unique_ptr<PaymentFields> payment_;
+    optional<Product> selected_;
+    bool hasPreview_ = false;
     bool canBill_ = false;
 };
 
+constexpr auto alignRight = Qt::AlignRight | Qt::AlignVCenter;
+
+QPushButton* selectableRow(QWidget* parent, QRect bounds, const QString& name, bool selected)
+{
+    auto* row = new QPushButton(parent);
+    row->setGeometry(bounds);
+    row->setAccessibleName(name);
+    row->setCursor(Qt::PointingHandCursor);
+    row->setProperty("selected", selected);
+    row->setAccessibleDescription(selected ? "Selected" : "");
+    row->setStyleSheet(
+        "QPushButton { border:1px solid transparent; background:transparent; border-radius:12px; }"
+        "QPushButton:hover { background:#fafafa; }"
+        "QPushButton[selected=true] { border-color:#dadada; background:#f6f6f6; }"
+        "QPushButton:focus { border-color:#858585; }");
+    return row;
+}
+
+void panelTitle(QWidget* parent, int x, const QString& title, const QString& subtitle)
+{
+    label(parent, {x, 23, 450, 24}, title, 20, detailInk, QFont::DemiBold);
+    label(parent, {x, 53, 530, 16}, subtitle, 13, detailMuted);
+}
+
 class HistoryPage final : public PosWindow::OrderHistoryView {
 public:
-    explicit HistoryPage(PosWindow& window)
+    explicit HistoryPage(PosWindow& window) : window_(window)
     {
-        auto* body = new QHBoxLayout(this);
-        auto* listColumn = new QVBoxLayout;
-        listColumn->addWidget(new QLabel("Order History"));
-        listColumn->addWidget(list_, 1);
-        body->addLayout(listColumn, 2);
-        auto* details = new QVBoxLayout;
-        details->addWidget(new QLabel("Saved bill"));
-        bill_->setReadOnly(true);
-        bill_->setPlaceholderText("Select an order to view its bill.");
-        details->addWidget(bill_, 1);
-        details->addWidget(payment_);
-        details->addWidget(error_);
-        auto* actions = new QHBoxLayout;
-        actions->addWidget(paid_);
-        actions->addWidget(archive_);
-        details->addLayout(actions);
-        body->addLayout(details, 3);
-        clearBill();
-
-        connect(list_, &QListWidget::currentItemChanged, this, [&window](QListWidgetItem* item) {
-            if (item) window.onOrderSelected(item->data(Qt::UserRole).toString().toStdString());
-        });
-        connect(paid_, &QPushButton::clicked, &window, &PosWindow::onMarkPaidClicked);
+        label(this, {0, 6, 600, 33}, "Order History", 28, detailInk, QFont::DemiBold);
+        label(this, {0, 44, 600, 16}, "Past orders and saved bills", 13, detailMuted);
+        auto* list = surface(this, {0, 73, 650, 885});
+        panelTitle(list, 24, "Past orders", "Select an order to view its saved bill");
+        rule(list, 24, 88, 602);
+        orders_ = viewport(list, {16, 105, 618, 740});
+        auto* bill = surface(this, {674, 73, 828, 885});
+        bill_ = viewport(bill, {0, 0, 820, 780});
+        error_ = label(bill, {28, 760, 772, 34}, {}, 14, detailMuted);
+        error_->setWordWrap(true);
+        archive_ = action(bill, {28, 805, 120, 42}, "Archive");
+        pay_ = action(bill, {631, 805, 169, 42}, "Mark as Paid", Action::Primary);
+        connect(pay_, &QPushButton::clicked, &window, &PosWindow::onMarkPaidClicked);
         connect(archive_, &QPushButton::clicked, &window, &PosWindow::onArchiveClicked);
+        clearBill();
     }
 
-    Result<Payment> readPayment() const override { return payment_->read(); }
-    void showError(const string& message) override { error_->setText(text(message)); }
+    Result<Payment> readPayment() const override
+    {
+        return payment_ ? payment_->read() : Result<Payment>{false, "Select a held bill.", {}};
+    }
+
+    void showError(const string& message) override
+    {
+        error_->setText(text(message));
+        bill_->setFixedHeight(message.empty() ? 780 : 760);
+    }
+
     void showOrders(const vector<SaleRecord>& orders, const string& selectedId) override
     {
-        const QSignalBlocker blocker(list_);
-        list_->clear();
-        for (const SaleRecord& order : orders) {
-            auto* item = new QListWidgetItem(
-                QString("%1 · %2\n%3 · %4").arg(text(order.ids.orderId), text(order.customer.name),
-                      text(order.timestamp.date), statusText(order.status)), list_);
-            item->setData(Qt::UserRole, text(order.ids.orderId));
-            if (order.ids.orderId == selectedId) list_->setCurrentItem(item);
+        auto* rows = newRows(*orders_, 618);
+        int y = 0;
+        for (const auto& order : orders) {
+            const bool selected = selectedId == order.ids.orderId;
+            auto* row = selectableRow(rows, {0, y, 618, 112}, text(order.customer.name), selected);
+            const int x = selected ? 17 : 16;
+            label(row, {x, 15, 340, 16}, "#" + text(order.ids.orderId), 13, detailInk, QFont::DemiBold);
+            auto* customer = label(row, {x, 37, 340, 19}, {}, 16, detailInk);
+            const int height = wrapHeight(*customer, text(order.customer.name), 19);
+            customer->setFixedHeight(height);
+            label(row, {x, 43 + height, 340, 16}, dateText(order.timestamp), 13, detailMuted);
+            label(row, {480, 16, 120, 14}, statusText(order.status), 12, detailMuted,
+                  QFont::Normal, alignRight);
+            label(row, {382, 72, 218, 17}, "PKR " + formattedMoney(order.totals.payable), 14,
+                  detailInk, QFont::DemiBold, alignRight);
+            const int rowHeight = std::max(112, height + 75);
+            row->resize(618, rowHeight);
+            connect(row, &QPushButton::clicked, this, [this, id = order.ids.orderId] {
+                window_.onOrderSelected(id);
+                if (auto* current = orders_->widget()) {
+                    for (auto* child : current->findChildren<QPushButton*>(QString{}, Qt::FindDirectChildrenOnly))
+                        markSelected(*child, child->property("orderId").toString() == text(id));
+                }
+            });
+            row->setProperty("orderId", text(order.ids.orderId));
+            y += rowHeight;
+            if (&order != &orders.back()) {
+                rule(rows, 0, y + 6, 602);
+                y += 13;
+            }
         }
+        if (orders.empty()) {
+            label(rows, {32, 24, 540, 21}, "No saved orders", 18, detailInk, QFont::DemiBold);
+            label(rows, {32, 58, 540, 36}, "Generate a bill in Current Order to see it here.", 14, detailMuted);
+            y = 100;
+        }
+        finishRows(*orders_, *rows, y);
     }
+
     void showBill(const SaleRecord& order) override
     {
-        QString contents = QString("Bill %1\nOrder %2 · %3 %4\n%5\nCustomer: %6")
-            .arg(text(order.ids.billId), text(order.ids.orderId), text(order.timestamp.date),
-                 text(order.timestamp.time), statusText(order.status), text(order.customer.name));
-        if (!order.customer.contact.empty()) contents += "\nContact: " + text(order.customer.contact);
-        contents += "\n\n";
-        for (const SaleLine& line : order.lines) {
-            contents += QString("%1  × %2   |   PKR %3 / unit   |   Discount %4 / unit\n")
-                .arg(text(line.acronym), quantityText(line.quantity, Unit::Weight),
-                     money(line.unitPrice), money(line.discountPerUnit));
-        }
-        contents += "\n" + totalsText(order.totals);
-        if (order.payment.recorded) {
-            const QString method = order.payment.mode == PaymentMode::Cash ? "Cash" :
-                order.payment.mode == PaymentMode::Card ? "Card" : "Wallet";
-            contents += QString("\nPayment: PKR %1 · %2").arg(money(order.payment.amount), method);
-            if (!order.payment.merchant.empty()) contents += " · " + text(order.payment.merchant);
-        }
-        bill_->setPlainText(contents);
+        payment_.reset();
+        auto* content = newRows(*bill_, 820);
         const bool held = order.status == OrderStatus::OnHold;
-        payment_->setVisible(held);
-        if (held) payment_->setAmount(order.totals.payable);
-        paid_->setVisible(held);
+        const auto metadata = [content](int x, int y, int width, const QString& name, const QString& value) {
+            label(content, {x, y, width, 14}, name, 12, detailMuted);
+            auto* field = label(content, {x, y + 18, width, 17}, value, 14, detailInk);
+            field->setToolTip(value);
+            return field;
+        };
+        label(content, {28, 23, 500, 24}, "Saved bill", 20, detailInk, QFont::DemiBold);
+        label(content, {680, 27, 120, 14}, statusText(order.status), 12, detailMuted,
+              QFont::Normal, alignRight);
+        metadata(28, 66, 174, "Bill ID", text(order.ids.billId));
+        metadata(224, 66, 174, "Order ID", text(order.ids.orderId));
+        metadata(420, 66, 344, "Date and time", dateText(order.timestamp));
+        rule(content, 28, 115, 772);
+        auto* customer = metadata(28, 130, 180, "Customer", text(order.customer.name));
+        const int customerHeight = wrapHeight(*customer, customer->text(), 17);
+        customer->setFixedHeight(customerHeight);
+        auto* contact = metadata(224, 130, 535, "Contact",
+            order.customer.contact.empty() ? "—" : text(order.customer.contact));
+        const int contactHeight = wrapHeight(*contact, contact->text(), 17);
+        contact->setFixedHeight(contactHeight);
+        int y = 181 + std::max(customerHeight, contactHeight) - 17;
+        rule(content, 28, y, 772);
+        label(content, {28, y + 16, 264, 16}, "Acronym", 13, detailInk, QFont::Medium);
+        label(content, {316, y + 16, 100, 16}, "Unit price", 13, detailInk, QFont::Medium, alignRight);
+        label(content, {316, y + 34, 100, 13}, "(excl. tax)", 11, detailMuted, QFont::Normal, alignRight);
+        label(content, {434, y + 16, 108, 16}, "Discount / unit", 13, detailInk, QFont::Medium, alignRight);
+        label(content, {560, y + 16, 42, 16}, "Qty", 13, detailInk, QFont::Medium, alignRight);
+        y += 66;
+        for (const SaleLine& line : order.lines) {
+            label(content, {28, y, 260, 14}, text(line.acronym), 12, detailMuted);
+            label(content, {316, y, 100, 17}, formattedMoney(line.unitPrice), 14,
+                  detailInk, QFont::Normal, alignRight);
+            label(content, {434, y, 108, 17}, formattedMoney(line.discountPerUnit), 14,
+                  detailInk, QFont::Normal, alignRight);
+            label(content, {548, y, 54, 17}, ordinaryQuantity(line.quantity), 14,
+                  detailInk, QFont::Normal, alignRight);
+            y += 55;
+        }
+        y += 4;
+        rule(content, 28, y, 772);
+        const QStringList captions{"Subtotal before tax & discount", "Total tax", "Total discount"};
+        const std::array<int64_t, 3> figures{order.totals.subtotal, order.totals.tax, order.totals.discount};
+        for (int i = 0; i < 3; ++i) {
+            label(content, {445, y + 15 + i * 25, 190, 16}, captions[i], 13, detailMuted);
+            label(content, {638, y + 15 + i * 25, 162, 16}, formattedMoney(figures[i]), 13,
+                  detailInk, QFont::Normal, alignRight);
+        }
+        rule(content, 445, y + 91, 355);
+        label(content, {445, y + 103, 170, 19}, "Total payable", 16, detailInk, QFont::DemiBold);
+        label(content, {620, y + 103, 180, 19}, "PKR " + formattedMoney(order.totals.payable), 16,
+              detailInk, QFont::Bold, alignRight);
+        y += 139;
+        rule(content, 28, y, 772);
+        if (held) {
+            label(content, {28, y + 19, 400, 21}, "Record payment", 18, detailInk, QFont::DemiBold);
+            label(content, {28, y + 46, 772, 16},
+                  "No payment recorded. Enter payment details to mark this order as paid.", 13, detailMuted);
+            payment_ = std::make_unique<PaymentFields>(content, 28, y + 83, 230, 18, 276, "Merchant");
+            payment_->setAmount(order.totals.payable);
+            label(content, {276, y + 153, 230, 14}, "Cash / Card / Wallet", 12, detailMuted);
+            label(content, {28, y + 189, 772, 14}, "Payment details are a draft until marked as paid.",
+                  12, detailMuted);
+            y += 211;
+        } else {
+            label(content, {28, y + 19, 450, 21}, "Payment recorded", 18, detailInk, QFont::DemiBold);
+            label(content, {28, y + 46, 772, 16}, "Saved payment details", 13, detailMuted);
+            const QString mode = order.payment.mode == PaymentMode::Cash ? "Cash" :
+                order.payment.mode == PaymentMode::Card ? "Card" : "Wallet";
+            field(content, 28, y + 83, 230, "Payment amount (PKR)",
+                  order.payment.recorded ? formattedMoney(order.payment.amount) : "—", true);
+            field(content, 276, y + 83, 230, "Payment mode", order.payment.recorded ? mode : "—", true);
+            field(content, 524, y + 83, 276, "Merchant",
+                  order.payment.merchant.empty() ? "—" : text(order.payment.merchant), true);
+            label(content, {28, y + 189, 772, 14}, "Payment is read only.", 12, detailMuted);
+            y += 211;
+        }
+        finishRows(*bill_, *content, y);
+        pay_->setVisible(held);
         archive_->setEnabled(order.status != OrderStatus::Archived);
     }
+
     void clearBill() override
     {
-        bill_->clear();
-        payment_->hide();
-        paid_->hide();
+        payment_.reset();
+        auto* content = newRows(*bill_, 820);
+        label(content, {28, 23, 772, 24}, "Saved bill", 20, detailInk, QFont::DemiBold);
+        label(content, {52, 70, 724, 21}, "No order selected", 18, detailInk, QFont::DemiBold);
+        label(content, {52, 104, 724, 17}, "Select an order to view its saved bill.", 14, detailMuted);
+        finishRows(*bill_, *content, 180);
+        pay_->hide();
         archive_->setEnabled(false);
     }
 
 private:
-    QListWidget* list_ = new QListWidget;
-    QPlainTextEdit* bill_ = new QPlainTextEdit;
-    QLabel* error_ = wrappedLabel();
-    PaymentFields* payment_ = new PaymentFields;
-    QPushButton* paid_ = new QPushButton("Mark as Paid");
-    QPushButton* archive_ = new QPushButton("Archive");
+    PosWindow& window_;
+    QScrollArea* orders_ = nullptr;
+    QScrollArea* bill_ = nullptr;
+    QLabel* error_ = nullptr;
+    QPushButton* archive_ = nullptr;
+    QPushButton* pay_ = nullptr;
+    std::unique_ptr<PaymentFields> payment_;
 };
 
-class ProductFields final : public QWidget {
+class ProductFields final {
 public:
-    explicit ProductFields(bool editing)
+    ProductFields(QWidget* parent, bool editing)
     {
-        auto* form = new QFormLayout(this);
-        form->addRow("Barcode", barcode);
-        form->addRow("Acronym", acronym_);
-        form->addRow("Name", name_);
-        unit_->addItem("Count", static_cast<int>(Unit::Count));
-        unit_->addItem("Weight (kg)", static_cast<int>(Unit::Weight));
-        form->addRow("Unit", unit_);
-        form->addRow("Unit price (PKR)", price_);
-        form->addRow("Tax per unit (PKR)", tax_);
-        form->addRow("Discount per unit (PKR)", discount_);
-        form->addRow("Stock", stock_);
-        barcode->setReadOnly(editing);
-        tax_->setText("0.00");
-        discount_->setText("0.00");
+        if (editing) {
+            id = field(parent, 28, 104, 240, "Product ID", {}, true);
+            barcode = field(parent, 294, 104, 240, "Barcode value", {}, true);
+            acronym = field(parent, 560, 104, 240, "Acronym (max 8 characters)");
+            label(parent, {294, 172, 240, 13}, "Existing barcode value is read-only", 11, detailMuted);
+            name = field(parent, 28, 201, 372, "Product name");
+            makeUnit(parent, 428, 201, 372);
+            price = field(parent, 28, 283, 240, "Price / item (excl. tax)", {}, false, &priceCaption);
+            tax = field(parent, 294, 283, 240, "Tax per unit (PKR)", "0.00");
+            discount = field(parent, 560, 283, 240, "Discount per unit (PKR)", "0.00");
+            stock = field(parent, 28, 365, 240, "Available quantity");
+        } else {
+            id = field(parent, 28, 105, 282, "Product ID", "Assigned on save", true);
+            barcode = field(parent, 340, 105, 282, "Barcode value");
+            barcode->setMaxLength(6);
+            label(parent, {340, 170, 282, 13}, "Unique 6 digits, first digit non-zero", 11, detailMuted);
+            acronym = field(parent, 28, 203, 282, "Acronym (max 8 characters)");
+            name = field(parent, 340, 203, 282, "Product name");
+            makeUnit(parent, 28, 291, 282);
+            stock = field(parent, 340, 291, 282, "Available quantity (items)", {}, false, &quantityCaption);
+            price = field(parent, 28, 379, 282, "Price / item (excl. tax)", {}, false, &priceCaption);
+            tax = field(parent, 340, 379, 282, "Tax per unit (PKR)", "0.00");
+            discount = field(parent, 28, 467, 282, "Discount per unit (PKR)", "0.00");
+        }
+        QObject::connect(unit, &QComboBox::currentIndexChanged, unit, [this] { updateLabels(); });
+        updateLabels();
     }
 
     Result<Product> read() const
     {
         Product product;
         product.barcode = barcode->text().trimmed().toStdString();
-        product.acronym = acronym_->text().trimmed().toStdString();
-        product.name = name_->text().trimmed().toStdString();
-        product.unit = static_cast<Unit>(unit_->currentData().toInt());
-        const auto price = fixedInput(price_->text(), 2);
-        const auto tax = fixedInput(tax_->text(), 2);
-        const auto discount = fixedInput(discount_->text(), 2);
-        const auto stock = quantityInput(stock_->text(), product.unit);
-        if (!price.success) return {false, "Unit price: " + price.message, {}};
-        if (!tax.success) return {false, "Tax: " + tax.message, {}};
-        if (!discount.success) return {false, "Discount: " + discount.message, {}};
-        if (!stock.success) return {false, "Stock: " + stock.message, {}};
-        product.unitPrice = price.value;
-        product.taxPerUnit = tax.value;
-        product.discountPerUnit = discount.value;
-        product.available = stock.value;
+        product.acronym = acronym->text().trimmed().toStdString();
+        product.name = name->text().trimmed().toStdString();
+        product.unit = currentUnit();
+        const auto unitPrice = fixedInput(price->text(), 2);
+        const auto unitTax = fixedInput(tax->text(), 2);
+        const auto unitDiscount = fixedInput(discount->text(), 2);
+        const auto quantity = quantityInput(stock->text(), product.unit);
+        if (!unitPrice.success) return {false, "Unit price: " + unitPrice.message, {}};
+        if (!unitTax.success) return {false, "Tax: " + unitTax.message, {}};
+        if (!unitDiscount.success) return {false, "Discount: " + unitDiscount.message, {}};
+        if (!quantity.success) return {false, "Stock: " + quantity.message, {}};
+        product.unitPrice = unitPrice.value;
+        product.taxPerUnit = unitTax.value;
+        product.discountPerUnit = unitDiscount.value;
+        product.available = quantity.value;
         return {true, {}, product};
     }
 
-    void showProduct(const Product& product)
+    void show(const Product& product)
     {
+        id->setText(text(product.id));
         barcode->setText(text(product.barcode));
-        acronym_->setText(text(product.acronym));
-        name_->setText(text(product.name));
-        unit_->setCurrentIndex(unit_->findData(static_cast<int>(product.unit)));
-        price_->setText(money(product.unitPrice));
-        tax_->setText(money(product.taxPerUnit));
-        discount_->setText(money(product.discountPerUnit));
-        stock_->setText(quantityText(product.available, product.unit));
+        acronym->setText(text(product.acronym));
+        name->setText(text(product.name));
+        unit->setCurrentIndex(unit->findData(static_cast<int>(product.unit)));
+        price->setText(money(product.unitPrice));
+        tax->setText(money(product.taxPerUnit));
+        discount->setText(money(product.discountPerUnit));
+        stock->setText(quantityText(product.available, product.unit));
     }
 
-    QLineEdit* const barcode = new QLineEdit;
+    QLineEdit* id = nullptr;
+    QLineEdit* barcode = nullptr;
+    QComboBox* unit = nullptr;
 
 private:
-    QLineEdit* acronym_ = new QLineEdit;
-    QLineEdit* name_ = new QLineEdit;
-    QComboBox* unit_ = new QComboBox;
-    QLineEdit* price_ = new QLineEdit;
-    QLineEdit* tax_ = new QLineEdit;
-    QLineEdit* discount_ = new QLineEdit;
-    QLineEdit* stock_ = new QLineEdit;
+    void makeUnit(QWidget* parent, int x, int y, int width)
+    {
+        label(parent, {x, y, width, 16}, "Measurement unit", 13, detailInk);
+        unit = selector(parent, {x, y + 21, width, 39}, "Measurement unit");
+        unit->addItem("Count", static_cast<int>(Unit::Count));
+        unit->addItem("Weight (kg)", static_cast<int>(Unit::Weight));
+    }
+
+    Unit currentUnit() const { return static_cast<Unit>(unit->currentData().toInt()); }
+
+    void updateLabels()
+    {
+        const Unit selectedUnit = currentUnit();
+        const QString priceLabel = "Price / " + unitShort(selectedUnit) + " (excl. tax)";
+        const QString quantityLabel = selectedUnit == Unit::Count
+            ? "Available quantity (items)" : "Available quantity (kg)";
+        priceCaption->setText(priceLabel);
+        price->setAccessibleName(priceLabel);
+        if (quantityCaption)
+            quantityCaption->setText(quantityLabel);
+        stock->setAccessibleName(quantityLabel);
+    }
+
+    QLineEdit* acronym = nullptr;
+    QLineEdit* name = nullptr;
+    QLineEdit* price = nullptr;
+    QLineEdit* tax = nullptr;
+    QLineEdit* discount = nullptr;
+    QLineEdit* stock = nullptr;
+    QLabel* priceCaption = nullptr;
+    QLabel* quantityCaption = nullptr;
+};
+
+class CatalogueTabs final : public QTabWidget {
+public:
+    explicit CatalogueTabs(QWidget* parent) : QTabWidget(parent)
+    {
+        setDocumentMode(true);
+        tabBar()->hide();
+        setStyleSheet("QTabWidget::pane {border:none; background:transparent; margin:0; padding:0;}");
+    }
 };
 
 class CataloguePage final : public PosWindow::CatalogueView {
 public:
-    explicit CataloguePage(PosWindow& window)
+    explicit CataloguePage(PosWindow& window) : window_(window)
     {
-        auto* page = new QVBoxLayout(this);
-        page->addWidget(tabs_, 1);
-        page->addWidget(message_);
-        const auto previewLabel = [](QLabel& label) {
-            label.setAlignment(Qt::AlignCenter);
-            label.setFixedHeight(100);
-            label.setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        };
-        previewLabel(*savedImage_);
-        previewLabel(*newImage_);
-
-        auto* catalogue = new QWidget;
-        auto* listLayout = new QHBoxLayout(catalogue);
-        listLayout->addWidget(list_, 2);
-        auto* detail = new QVBoxLayout;
-        detail->addWidget(metadata_);
-        detail->addWidget(savedImage_);
-        detail->addWidget(edit_);
-        auto* actions = new QHBoxLayout;
-        actions->addWidget(update_);
-        actions->addWidget(remove_);
-        detail->addLayout(actions);
-        detail->addStretch();
-        listLayout->addLayout(detail, 3);
-        tabs_->addTab(catalogue, "View Catalogue");
-
+        label(this, {0, 6, 650, 33}, "Product Catalogue", 28, detailInk, QFont::DemiBold);
+        rule(this, 0, 103, 1502);
+        viewTab_ = action(this, {3, 59, 120, 32}, "View Catalogue", Action::Text);
+        addTab_ = action(this, {171, 59, 96, 32}, "Add Product", Action::Text);
+        indicator_ = new QWidget(this);
+        indicator_->setStyleSheet("background:#252525;border-radius:1px;");
+        tabs_ = new CatalogueTabs(this);
+        tabs_->setGeometry(0, 124, 1502, 834);
+        auto* view = new QWidget;
         auto* add = new QWidget;
-        auto* addLayout = new QVBoxLayout(add);
-        addLayout->addWidget(create_);
-        addLayout->addWidget(newImage_);
-        auto* buttons = new QHBoxLayout;
-        auto* preview = new QPushButton("Generate Preview");
-        auto* save = new QPushButton("Save Product");
-        buttons->addWidget(preview);
-        buttons->addWidget(save);
-        addLayout->addLayout(buttons);
-        addLayout->addStretch();
+        tabs_->addTab(view, "View Catalogue");
         tabs_->addTab(add, "Add Product");
-        clearProduct();
+        tabs_->tabBar()->hide();
+        connect(viewTab_, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(0); });
+        connect(addTab_, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(1); });
+        connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
+            updateTabs(index);
+            showError({});
+        });
+        updateTabs(0);
 
-        const auto select = [&window](QListWidgetItem* item) {
-            if (item) window.onProductSelected(item->data(Qt::UserRole).toString().toStdString());
-        };
-        connect(list_, &QListWidget::itemClicked, this, select);
-        connect(list_, &QListWidget::itemActivated, this, select);
-        connect(preview, &QPushButton::clicked, &window, &PosWindow::onGeneratePreview);
-        connect(save, &QPushButton::clicked, &window, &PosWindow::onSaveProduct);
+        auto* list = surface(view, {0, 0, 650, 834});
+        panelTitle(list, 24, "Products", "Select a product to view and edit its details");
+        auto* createLink = action(list, {486, 20, 140, 42}, "Add Product", Action::Primary);
+        connect(createLink, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(1); });
+        rule(list, 24, 88, 602);
+        label(list, {32, 105, 280, 16}, "Product", 13, detailMuted, QFont::Medium);
+        label(list, {346, 105, 100, 16}, "Available", 13, detailMuted, QFont::Medium, alignRight);
+        label(list, {486, 105, 132, 16}, "Unit price", 13, detailMuted, QFont::Medium, alignRight);
+        products_ = viewport(list, {16, 137, 618, 650});
+
+        details_ = surface(view, {674, 0, 828, 834});
+        panelTitle(details_, 28, "Product details", "Edit product details and available quantity");
+        status_ = label(details_, {680, 26, 120, 14}, {}, 12, detailMuted, QFont::Normal, alignRight);
+        rule(details_, 28, 84, 772);
+        edit_ = std::make_unique<ProductFields>(details_, true);
+        stockHint_ = label(details_, {294, 389, 505, 17}, {}, 12, detailMuted);
+        rule(details_, 28, 449, 772);
+        label(details_, {28, 466, 220, 18}, "Barcode image", 15, detailInk, QFont::DemiBold);
+        savedImage_ = std::make_unique<BarcodeDisplay>(details_, 28, 496);
+        info_ = viewport(details_, {316, 491, 456, 166});
+        rule(details_, 28, 716, 772);
+        editError_ = label(details_, {28, 665, 772, 42}, {}, 14, detailMuted);
+        editError_->setWordWrap(true);
+        remove_ = action(details_, {28, 750, 150, 42}, "Delete Product");
+        cancel_ = action(details_, {513, 750, 112, 42}, "Cancel");
+        update_ = action(details_, {637, 750, 163, 42}, "Save Changes", Action::Primary);
+        connect(cancel_, &QPushButton::clicked, this, [this] {
+            if (selected_) {
+                edit_->show(*selected_);
+                showError({});
+            }
+        });
         connect(update_, &QPushButton::clicked, &window, &PosWindow::onUpdateProduct);
         connect(remove_, &QPushButton::clicked, &window, &PosWindow::onDeleteProduct);
-        connect(create_->barcode, &QLineEdit::textChanged, this, [this] { newImage_->clear(); });
-        connect(tabs_, &QTabWidget::currentChanged, this, [this] { showError({}); });
+        noProduct_ = label(details_, {28, 23, 772, 30},
+                           "Select a product to view its details.", 14, detailMuted);
+
+        auto* form = surface(add, {0, 0, 650, 834});
+        panelTitle(form, 28, "Add product", "Enter product details and generate its barcode");
+        rule(form, 28, 84, 594);
+        create_ = std::make_unique<ProductFields>(form, false);
+        rule(form, 28, 694, 594);
+        addError_ = label(form, {28, 640, 594, 46}, {}, 14, detailMuted);
+        addError_->setWordWrap(true);
+        auto* preview = action(form, {28, 733, 190, 42}, "Generate Barcode");
+        auto* save = action(form, {462, 733, 160, 42}, "Save Product", Action::Primary);
+        connect(preview, &QPushButton::clicked, &window, &PosWindow::onGeneratePreview);
+        connect(save, &QPushButton::clicked, &window, &PosWindow::onSaveProduct);
+
+        auto* draft = surface(add, {674, 0, 828, 834});
+        label(draft, {28, 24, 680, 24}, "Generated barcode", 20, detailInk, QFont::DemiBold);
+        draftStatus_ = label(draft, {28, 54, 772, 16}, "Enter a barcode and generate a preview.", 13, detailMuted);
+        rule(draft, 28, 84, 772);
+        barcodeFrame_ = surface(draft, {28, 111, 772, 258}, "#fafafa", "#e7e7e7", 12);
+        newImage_ = std::make_unique<BarcodeDisplay>(barcodeFrame_, 265, 65);
+        barcodeFrame_->hide();
+        draftInfo_ = viewport(draft, {28, 402, 772, 400});
+        showMetadata(*draftInfo_, 772, {}, true);
+        connect(create_->barcode, &QLineEdit::textEdited, this, [this] {
+            create_->id->setText("Assigned on save");
+            showBarcodePreview({});
+            showMetadata(*draftInfo_, 772, {}, true);
+        });
+        clearProduct();
     }
 
     QTabWidget& tabs() const { return *tabs_; }
     string readBarcode() const override { return create_->barcode->text().trimmed().toStdString(); }
     Result<Product> readNewProduct() const override { return create_->read(); }
     Result<Product> readEditedProduct() const override { return edit_->read(); }
-    void showError(const string& message) override { message_->setText(text(message)); }
+
+    void showError(const string& message) override
+    {
+        (tabs_->currentIndex() == 0 ? editError_ : addError_)->setText(text(message));
+    }
+
     void showProducts(const vector<Product>& products, const string& selectedId) override
     {
-        list_->clear();
+        auto* rows = newRows(*products_, 618);
+        int y = 0;
         for (const Product& product : products) {
-            const QString stock = product.available == 0 ? "Out of stock" :
-                quantityText(product.available, product.unit) + (product.unit == Unit::Count ? " in stock" : " kg");
-            auto* item = new QListWidgetItem(text(product.name) + "\n" + stock, list_);
-            item->setData(Qt::UserRole, text(product.id));
-            if (product.id == selectedId) list_->setCurrentItem(item);
+            const bool selected = product.id == selectedId;
+            const int x = selected ? 17 : 16;
+            auto* row = selectableRow(rows, {0, y, 618, 105}, text(product.name), selected);
+            auto* name = label(row, {x, 15, 280, 18}, {}, 15, detailInk);
+            const int height = wrapHeight(*name, text(product.name), 18);
+            name->setFixedHeight(height);
+            label(row, {x, 21 + height, 280, 14}, text(product.acronym), 12, detailMuted);
+            if (product.available == 0)
+                label(row, {x, 47 + height, 200, 14}, "Out of stock", 12, detailMuted);
+            label(row, {330, 20, 100, 17}, availability(product), 14, detailInk, QFont::Medium, alignRight);
+            label(row, {456, 20, 146, 17}, "PKR " + formattedMoney(product.unitPrice), 14,
+                  detailInk, QFont::Medium, alignRight);
+            const int rowHeight = std::max(105, height + 68);
+            row->resize(618, rowHeight);
+            row->setProperty("productId", text(product.id));
+            connect(row, &QPushButton::clicked, this, [this, id = product.id] {
+                window_.onProductSelected(id);
+                if (auto* current = products_->widget()) {
+                    for (auto* child : current->findChildren<QPushButton*>(QString{}, Qt::FindDirectChildrenOnly))
+                        markSelected(*child, child->property("productId").toString() == text(id));
+                }
+            });
+            y += rowHeight;
+            if (&product != &products.back()) {
+                rule(rows, 16, y + 6, 586);
+                y += 13;
+            }
         }
+        if (products.empty()) {
+            label(rows, {32, 24, 550, 21}, "No products yet", 18, detailInk, QFont::DemiBold);
+            label(rows, {32, 58, 550, 17}, "Use Add Product to create your first catalogue entry.", 14, detailMuted);
+            y = 100;
+        }
+        finishRows(*products_, *rows, y);
     }
+
     void showProduct(const Product& product) override
     {
-        edit_->setEnabled(true);
-        update_->setEnabled(true);
-        remove_->setEnabled(true);
-        edit_->showProduct(product);
-        metadata_->setText("Product ID " + text(product.id) + "\nImage " + text(product.barcodeImagePath));
+        selected_ = product;
+        showProductDetails(true);
+        edit_->show(product);
+        details_->setEnabled(true);
+        status_->setText(product.available == 0 ? "Out of stock" : "");
+        setHeldReference(false);
         const QDir root(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
-        showImage(*savedImage_, QImage(root.filePath(text(product.barcodeImagePath))));
+        savedImage_->set(QImage(root.filePath(text(product.barcodeImagePath))), text(product.barcode));
+        showMetadata(*info_, 456, text(product.barcodeImagePath), false);
     }
+
+    void setHeldReference(bool held) override
+    {
+        edit_->unit->setEnabled(selected_ && !held);
+        remove_->setEnabled(selected_ && !held);
+        stockHint_->setText(held ? "Referenced by an on-hold bill" : "");
+    }
+
     void clearProduct() override
     {
-        edit_->showProduct({});
-        edit_->setEnabled(false);
-        update_->setEnabled(false);
-        remove_->setEnabled(false);
-        metadata_->setText("Select a product to view its specifications.");
-        savedImage_->clear();
+        selected_.reset();
+        edit_->show({});
+        details_->setEnabled(false);
+        showProductDetails(false);
+        savedImage_->set({});
+        showMetadata(*info_, 456, {}, false);
     }
-    void showBarcodePreview(const QImage& image) override { showImage(*newImage_, image); }
+
+    void showBarcodePreview(const QImage& image) override
+    {
+        newImage_->set(image, text(readBarcode()));
+        barcodeFrame_->setVisible(!image.isNull());
+        draftStatus_->setText(image.isNull() ? "Enter a barcode and generate a preview."
+                                              : "Barcode generated · Product not saved");
+    }
+
     void showSavedProduct(const Product& product) override
     {
-        message_->setText("Saved product " + text(product.id) + " · " + text(product.barcodeImagePath));
-        create_->showProduct({});
+        create_->id->setText(text(product.id));
+        const QDir root(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        const QImage barcode(root.filePath(text(product.barcodeImagePath)));
+        if (!barcode.isNull()) {
+            newImage_->set(barcode, text(product.barcode));
+            barcodeFrame_->show();
+        }
+        draftStatus_->setText("Product saved · Product ID " + text(product.id));
+        showMetadata(*draftInfo_, 772, text(product.barcodeImagePath), true);
     }
 
 private:
-    QTabWidget* tabs_ = new QTabWidget;
-    QListWidget* list_ = new QListWidget;
-    QLabel* message_ = wrappedLabel();
-    QLabel* metadata_ = wrappedLabel();
-    QLabel* savedImage_ = wrappedLabel();
-    QLabel* newImage_ = wrappedLabel();
-    ProductFields* edit_ = new ProductFields(true);
-    ProductFields* create_ = new ProductFields(false);
-    QPushButton* update_ = new QPushButton("Save Changes");
-    QPushButton* remove_ = new QPushButton("Delete Product");
+    void showProductDetails(bool visible)
+    {
+        for (auto* widget : details_->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly))
+            widget->setVisible(widget == noProduct_ ? !visible : visible);
+    }
+
+    void updateTabs(int index)
+    {
+        markSelected(*viewTab_, index == 0);
+        markSelected(*addTab_, index == 1);
+        viewTab_->setFont(interfaceFont(14, index == 0 ? QFont::DemiBold : QFont::Normal));
+        addTab_->setFont(interfaceFont(14, index == 1 ? QFont::DemiBold : QFont::Normal));
+        indicator_->setGeometry(index == 0 ? 0 : 168, 101, index == 0 ? 124 : 103, 3);
+    }
+
+    static void showMetadata(QScrollArea& area, int width, const QString& path, bool draft)
+    {
+        auto* content = newRows(area, width);
+        label(content, {0, 0, width, 16}, "Image filename", 12, detailMuted);
+        auto* name = label(content, {0, 24, width, 17}, {}, 14, detailInk);
+        const int nameHeight = wrapHeight(*name,
+            path.isEmpty() ? (draft ? "Not saved yet" : "—") : QFileInfo(path).fileName(), 17);
+        name->setFixedHeight(nameHeight);
+        label(content, {0, 32 + nameHeight, width, 16}, "Image path", 12, detailMuted);
+        auto* location = label(content, {0, 56 + nameHeight, width, 17}, {}, 14, detailInk);
+        const int pathHeight = wrapHeight(*location,
+            path.isEmpty() ? (draft ? "Available after saving" : "—") : path, 17);
+        location->setFixedHeight(pathHeight);
+        finishRows(area, *content, 64 + nameHeight + pathHeight);
+    }
+
+    PosWindow& window_;
+    CatalogueTabs* tabs_ = nullptr;
+    QPushButton* viewTab_ = nullptr;
+    QPushButton* addTab_ = nullptr;
+    QWidget* indicator_ = nullptr;
+    QWidget* details_ = nullptr;
+    QScrollArea* products_ = nullptr;
+    QScrollArea* info_ = nullptr;
+    QScrollArea* draftInfo_ = nullptr;
+    QLabel* status_ = nullptr;
+    QLabel* stockHint_ = nullptr;
+    std::unique_ptr<BarcodeDisplay> savedImage_;
+    std::unique_ptr<BarcodeDisplay> newImage_;
+    QLabel* noProduct_ = nullptr;
+    QWidget* barcodeFrame_ = nullptr;
+    QLabel* draftStatus_ = nullptr;
+    QLabel* editError_ = nullptr;
+    QLabel* addError_ = nullptr;
+    QPushButton* remove_ = nullptr;
+    QPushButton* cancel_ = nullptr;
+    QPushButton* update_ = nullptr;
+    std::unique_ptr<ProductFields> edit_;
+    std::unique_ptr<ProductFields> create_;
+    optional<Product> selected_;
+};
+
+QString assetPath(const QString& filename)
+{
+    const QString candidate = QDir(QCoreApplication::applicationDirPath()).filePath("assets/" + filename);
+    if (QFileInfo::exists(candidate)) return candidate;
+#ifdef Q_OS_MACOS
+    const QString bundled = QDir(QCoreApplication::applicationDirPath()).filePath("../Resources/assets/" + filename);
+    if (QFileInfo::exists(bundled)) return bundled;
+#endif
+    return QDir(QString::fromUtf8(EYERIS_SOURCE_ASSET_DIR)).filePath(filename);
+}
+
+QPixmap wordmarkPixmap()
+{
+    const QImage exported(assetPath("eyeris-wordmark.png"));
+    QImage transparent(exported.size(), QImage::Format_ARGB32);
+    if (exported.width() > 0) transparent.setDevicePixelRatio(exported.width() / 168.0);
+    const QColor wordmarkInk(ink);
+    for (int y = 0; y < exported.height(); ++y) {
+        for (int x = 0; x < exported.width(); ++x) {
+            const QRgb pixel = exported.pixel(x, y);
+            // The Figma text export is antialiased over white. Recover its coverage.
+            const int alpha = std::clamp((255 - qGray(pixel)) * qAlpha(pixel) /
+                                         (255 - wordmarkInk.red()), 0, 255);
+            transparent.setPixel(x, y, qRgba(wordmarkInk.red(), wordmarkInk.green(),
+                                             wordmarkInk.blue(), alpha));
+        }
+    }
+    return QPixmap::fromImage(transparent);
+}
+
+class Artwork final : public QWidget {
+public:
+    Artwork(QWidget* parent, const QString& filename, int radius)
+        : QWidget(parent), image_(assetPath(filename)), radius_(radius) {}
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+        QPainterPath clip;
+        clip.addRoundedRect(rect(), radius_, radius_);
+        painter.setClipPath(clip);
+        painter.fillRect(rect(), QColor("#f5f5f5"));
+        if (!image_.isNull()) {
+            const QSize fitted = image_.size().scaled(size(), Qt::KeepAspectRatioByExpanding);
+            painter.drawImage(QRect(QPoint((width() - fitted.width()) / 2,
+                                           (height() - fitted.height()) / 2), fitted), image_);
+        }
+    }
+
+private:
+    QImage image_;
+    int radius_;
+};
+
+class TitleBar final : public QWidget {
+public:
+    TitleBar(QWidget* parent, PosWindow& window) : QWidget(parent), window_(window)
+    {
+        setGeometry(0, 0, canvasWidth, 40);
+        rule(this, 0, 39, canvasWidth, "#e3e3e3");
+        label(this, {0, 12, canvasWidth, 16}, "Eyeris", 13, muted, QFont::Medium, Qt::AlignCenter);
+        const std::array<const char*, 3> names{"Close", "Minimize", "Zoom"};
+        const std::array<const char*, 3> icons{closeSvg, minimizeSvg, zoomSvg};
+        for (int i = 0; i < 3; ++i) {
+            auto* button = new QPushButton(this);
+            button->setGeometry(16 + 20 * i, 10, 20, 20);
+            button->setStyleSheet(
+                "QPushButton {border:1px solid transparent; background:transparent; border-radius:8px;}"
+                "QPushButton:focus {border-color:#858585;}");
+            button->setAccessibleName(names[i]);
+            new SvgIcon(button, {4, 4, 12, 12}, icons[i]);
+            connect(button, &QPushButton::clicked, this, [this, i] {
+                if (i == 0) window_.close();
+                else if (i == 1) window_.showMinimized();
+                else toggleZoom();
+            });
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        QPainterPath shape;
+        shape.addRoundedRect(QRect(0, 0, width(), 64), 16, 16);
+        painter.fillPath(shape, QColor("#f5f5f5"));
+    }
+
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton && window_.windowHandle())
+            window_.windowHandle()->startSystemMove();
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton) toggleZoom();
+    }
+
+private:
+    void toggleZoom()
+    {
+        if (window_.isMaximized()) window_.showNormal();
+        else window_.showMaximized();
+    }
+
+    PosWindow& window_;
+};
+
+class PosViewport final : public QScrollArea {
+public:
+    explicit PosViewport(QWidget* content)
+    {
+        setWidget(content);
+        setFrameShape(QFrame::NoFrame);
+        setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+        setStyleSheet("QScrollArea {background:transparent; border:none;}");
+        viewport()->setAutoFillBackground(false);
+    }
 };
 
 } // namespace
@@ -609,27 +1739,58 @@ PosWindow::PosWindow(ProductService& products, BarcodeAssetService& images,
       scanner_(scanner),
       checkout_(checkout),
       history_(history) {
-    setWindowTitle("Eyeris POS");
-    resize(1163, 760);
-    auto* shell = new QWidget;
-    auto* layout = new QVBoxLayout(shell);
-    auto* navigation = new QHBoxLayout;
-    auto* pages = new QStackedWidget;
-    for (const string name : {"Current Order", "Order History", "Product Catalogue"}) {
-        auto* button = new QPushButton(text(name));
-        navigation->addWidget(button);
-        connect(button, &QPushButton::clicked, this, [this, name] { showPage(name); });
+    setWindowTitle("Eyeris");
+    setWindowFlag(Qt::FramelessWindowHint);
+    setAttribute(Qt::WA_TranslucentBackground);
+    auto* shell = new Artwork(nullptr, "eyeris-app-background.png", 16);
+    shell->setObjectName("eyerisCanvas");
+    shell->setFixedSize(canvasWidth, canvasHeight);
+    new TitleBar(shell, *this);
+    auto* sidebar = new Artwork(shell, "eyeris-sidebar-background.png", 21);
+    sidebar->setGeometry(24, 64, 210, 958);
+    const QPixmap logo = wordmarkPixmap();
+    auto* wordmark = label(sidebar, {19, 29, 168, 48}, {}, 54, ink);
+    wordmark->setAccessibleName("Eyeris");
+    if (logo.isNull()) {
+        wordmark->setText("Eyeris");
+    } else {
+        wordmark->setPixmap(logo);
     }
-    layout->addLayout(navigation);
-    layout->addWidget(pages, 1);
-    auto* scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setWidget(shell);
-    setCentralWidget(scroll);
+    const std::array<string, 3> destinations{"Current Order", "Order History", "Product Catalogue"};
+    auto* pages = new QStackedWidget(shell);
+    pages->setGeometry(pageLeft, 64, pageWidth, 958);
+    std::array<QPushButton*, 3> navigation{};
+    for (size_t i = 0; i < destinations.size(); ++i) {
+        navigation[i] = action(sidebar, {11, 99 + 52 * static_cast<int>(i), 186, 42},
+                               text(destinations[i]), Action::Navigation);
+        navigation[i]->setProperty("primaryNav", i == 0);
+        connect(navigation[i], &QPushButton::clicked, this, [this, name = destinations[i]] {
+            showPage(name);
+        });
+    }
+    const auto markNavigation = [navigation](int active) {
+        for (size_t i = 0; i < navigation.size(); ++i) {
+            const bool selected = static_cast<int>(i) == active;
+            markSelected(*navigation[i], selected);
+            navigation[i]->setFont(interfaceFont(14, selected ? QFont::DemiBold : QFont::Normal));
+        }
+    };
+    connect(pages, &QStackedWidget::currentChanged, this, markNavigation);
+    setCentralWidget(new PosViewport(shell));
+    if (const auto* screen = QGuiApplication::primaryScreen()) {
+        const auto available = screen->availableGeometry().adjusted(8, 8, -8, -8);
+        const QSize size(std::min(canvasWidth, available.width()),
+                         std::min(canvasHeight, available.height()));
+        resize(size);
+        move(available.center() - QPoint(size.width() / 2, size.height() / 2));
+    } else {
+        resize(canvasWidth, canvasHeight);
+    }
     auto* currentOrder = new CurrentOrderPage(*this);
     auto* historyPage = new HistoryPage(*this);
     auto* catalogue = new CataloguePage(*this);
     bindPages(*pages, *currentOrder, *historyPage, *catalogue, catalogue->tabs());
+    markNavigation(pages->currentIndex());
 
     cameraTimer_.setInterval(200);
     cameraTimer_.setTimerType(Qt::CoarseTimer);
@@ -924,6 +2085,15 @@ void PosWindow::onProductSelected(const string& productId) {
     selectedCatalogueProduct_ = product.value;
     view.showError({});
     view.showProduct(*selectedCatalogueProduct_);
+    const auto orders = history_.list();
+    const auto referencesProduct = [&productId](const SaleRecord& order) {
+        return order.status == OrderStatus::OnHold &&
+               std::any_of(order.lines.begin(), order.lines.end(), [&productId](const SaleLine& line) {
+                   return line.productId == productId;
+               });
+    };
+    view.setHeldReference(orders.success &&
+                          std::any_of(orders.value.begin(), orders.value.end(), referencesProduct));
 }
 
 // generates the barcode preview in memory for the add product form
@@ -980,8 +2150,7 @@ void PosWindow::onUpdateProduct() {
         return;
     }
 
-    selectedCatalogueProduct_ = saved.value;
-    view.showProduct(*selectedCatalogueProduct_);
+    onProductSelected(saved.value.id);
     refreshCatalogue();
 }
 
@@ -1043,6 +2212,7 @@ void PosWindow::showPage(const string& pageName) {
         auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
         view.showCartError(refreshCart());
         currentOrderOpened_ = true;
+        view.showCameraPreview({});
         cameraStatus_ = scanner_.start(0);
         if (cameraStatus_.success) {
             cameraTimer_.start();
