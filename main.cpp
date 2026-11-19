@@ -2,6 +2,7 @@
 #include <QCloseEvent>
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
@@ -11,6 +12,7 @@
 #include <QImage>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLockFile>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QPainter>
@@ -23,6 +25,7 @@
 #include <QStringList>
 #include <QRegularExpressionValidator>
 #include <QStackedWidget>
+#include <QStandardPaths>
 #include <QString>
 #include <QSvgRenderer>
 #include <QTimer>
@@ -32,6 +35,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <filesystem>
 #include <string>
 
 #include "BarcodeDecoder.h"
@@ -40,6 +44,16 @@
 #include "ReaderContracts.h"
 #include "barcodeGenerator.h"
 #include "camera-harness.h"
+#include "BarcodeAssetService.h"
+#include "CartService.h"
+#include "CheckoutService.h"
+#include "HistoryService.h"
+#include "IdGenerator.h"
+#include "PosScanner.h"
+#include "PosStorage.h"
+#include "PosWindow.h"
+#include "PricingCalculator.h"
+#include "ProductService.h"
 
 namespace {
 
@@ -790,6 +804,89 @@ private:
     }
 };
 
+// Initialize only a store with no existing POS text files. Images are copied first,
+// so a failed import can be retried without committing an incomplete snapshot.
+Status initializePosStore(PosStorage &store, BarcodeAssetService &images,
+                          const std::filesystem::path &dataRoot)
+{
+    namespace fs = std::filesystem;
+    try {
+        fs::create_directories(dataRoot / "barcodes");
+        const auto lockPath = QString::fromStdString((dataRoot / ".initialize.lock").u8string());
+        QLockFile initializationLock(lockPath);
+        if (!initializationLock.tryLock(5000))
+            return {false, "Could not lock the project data directory for initialization."};
+
+        const char *files[] = {"Product.txt", "Order.txt", "OrderDetail.txt", "Bill.txt"};
+        bool initialized = false;
+        for (const char *file : files)
+            initialized = initialized || fs::exists(dataRoot / file);
+
+        Status loaded = store.load();
+        if (!loaded.success || initialized)
+            return loaded;
+
+        StoreData snapshot;
+        const QString legacyLocation = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        if (!legacyLocation.isEmpty()) {
+            const fs::path legacyRoot = fs::u8path(legacyLocation.toUtf8().constData());
+            bool legacyData = false;
+            if (fs::exists(legacyRoot) && !fs::equivalent(legacyRoot, dataRoot)) {
+                for (const char *file : files)
+                    legacyData = legacyData || fs::exists(legacyRoot / file);
+            }
+            if (legacyData) {
+                PosStorage legacy(legacyRoot);
+                const Status legacyLoaded = legacy.load();
+                if (!legacyLoaded.success)
+                    return {false, "Could not load legacy POS data: " + legacyLoaded.message};
+                const auto legacySnapshot = legacy.read();
+                if (!legacySnapshot.success)
+                    return {false, "Could not read legacy POS data: " + legacySnapshot.message};
+                snapshot = legacySnapshot.value;
+                for (Product &product : snapshot.products) {
+                    const fs::path source = legacyRoot / fs::u8path(product.barcodeImagePath);
+                    const std::string relative = "barcodes/" + product.barcode + ".png";
+                    const fs::path destination = dataRoot / fs::u8path(relative);
+                    if (fs::exists(source)) {
+                        if (fs::exists(destination)) {
+                            QFile oldFile(QString::fromStdString(source.u8string()));
+                            QFile newFile(QString::fromStdString(destination.u8string()));
+                            if (!oldFile.open(QIODevice::ReadOnly) || !newFile.open(QIODevice::ReadOnly))
+                                return {false, "Could not compare legacy barcode image " + product.barcode + "."};
+                            const QByteArray oldBytes = oldFile.readAll();
+                            const QByteArray newBytes = newFile.readAll();
+                            if (oldFile.error() != QFileDevice::NoError || newFile.error() != QFileDevice::NoError || oldBytes != newBytes)
+                                return {false, "Conflicting barcode image during legacy import: " + product.barcode + "."};
+                        } else {
+                            std::error_code error;
+                            fs::copy_file(source, destination, fs::copy_options::none, error);
+                            if (error) {
+                                // copy_file may leave a partial destination after a failed copy.
+                                std::error_code cleanupError;
+                                if (error != std::errc::file_exists)
+                                    fs::remove(destination, cleanupError);
+                                return {false, "Could not copy legacy barcode image " + product.barcode + ": " + error.message()};
+                            }
+                        }
+                    } else {
+                        const auto generated = images.save(product.barcode);
+                        if (!generated.success)
+                            return {false, "Could not regenerate barcode " + product.barcode + ": " + generated.message};
+                    }
+                    product.barcodeImagePath = relative;
+                }
+            }
+        }
+        const Status saved = store.save(snapshot);
+        if (!saved.success)
+            return {false, "Could not initialize project POS data: " + saved.message};
+        return saved;
+    } catch (const std::exception &error) {
+        return {false, std::string("Could not initialize project POS data: ") + error.what()};
+    }
+}
+
 } // namespace
 
 int main(int argc, char *argv[])
@@ -798,7 +895,26 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("Eyeris"));
     QApplication::setOrganizationName(QStringLiteral("Eyeris"));
 
-    EyerisWindow window;
+    const auto dataRoot = std::filesystem::u8path(EYERIS_PROJECT_DATA_DIR);
+    PosStorage store(dataRoot);
+    BarcodeAssetService images(dataRoot);
+    const Status loaded = initializePosStore(store, images, dataRoot);
+    if (!loaded.success) {
+        QMessageBox::critical(nullptr, "Eyeris", QString::fromStdString(loaded.message));
+        return 1;
+    }
+
+    const IdGenerator ids;
+    const PricingCalculator pricing;
+    ProductService products(store, images, ids);
+    CartService cart(products, pricing);
+    ImageSource camera;
+    const BarcodeDecoder decoder;
+    PosScanner scanner(camera, decoder);
+    CheckoutService checkout(store, products, pricing, ids);
+    HistoryService history(store, products);
+    PosWindow window(products, images, cart, scanner, checkout, history);
     window.show();
+    window.showPage("Current Order");
     return app.exec();
 }

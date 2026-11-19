@@ -1,4 +1,5 @@
 #include "BarcodeImageIO.h"
+#include <QSaveFile>
 
 // ---------------------------------------------------------------------------
 // Save barcode image
@@ -8,7 +9,8 @@ bool saveBarcodeImage(const QImage& image, const QString& filename)
     if (image.isNull() || filename.isEmpty())
         return false;
 
-    return image.save(filename, "PNG");
+    QSaveFile file(filename);
+    return file.open(QIODevice::WriteOnly) && image.save(&file, "PNG") && file.commit();
 }
 
 // ---------------------------------------------------------------------------

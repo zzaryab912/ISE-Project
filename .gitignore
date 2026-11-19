@@ -46,9 +46,12 @@ dist/
 logs/
 *.log
 
-# Temporary files
+# Temp files
 tmp/
 temp/
 
 # Local notes and scratch work
 /documentations/
+
+# Project-local POS data
+/data/

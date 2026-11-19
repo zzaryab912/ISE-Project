@@ -5,7 +5,11 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Svg)
-find_package(OpenCV 4 REQUIRED COMPONENTS core imgproc imgcodecs videoio objdetect)
+set(EYERIS_OPENCV_COMPONENTS core imgproc imgcodecs videoio objdetect)
+find_package(OpenCV 4 QUIET COMPONENTS ${EYERIS_OPENCV_COMPONENTS})
+if(NOT OpenCV_FOUND)
+    find_package(OpenCV 5 REQUIRED COMPONENTS ${EYERIS_OPENCV_COMPONENTS} geometry)
+endif()
 
 add_executable(Eyeris MACOSX_BUNDLE
     main.cpp
@@ -14,10 +18,21 @@ add_executable(Eyeris MACOSX_BUNDLE
     BarcodeImageIO.cpp
     camera-harness.cpp
     BarcodeDecoder.cpp
+    PosStorage.cpp
+    IdGenerator.cpp
+    BarcodeAssetService.cpp
+    ProductService.cpp
+    PricingCalculator.cpp
+    CartService.cpp
+    PosScanner.cpp
+    CheckoutService.cpp
+    HistoryService.cpp
+    PosWindow.cpp
 )
 
 target_include_directories(Eyeris PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_compile_definitions(Eyeris PRIVATE
+    EYERIS_PROJECT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
     EYERIS_SOURCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
 target_link_libraries(Eyeris PRIVATE Qt6::Widgets Qt6::Svg ${OpenCV_LIBS})
