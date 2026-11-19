@@ -251,7 +251,7 @@ private:
     bool flip_;
 };
 
-enum class Action { Primary, Checkout, Secondary, Text, Navigation };
+enum class Action { Primary, Checkout, Hold, Secondary, Text, Navigation };
 
 void markSelected(QPushButton& button, bool selected)
 {
@@ -269,13 +269,19 @@ QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action 
     widget->setCursor(Qt::PointingHandCursor);
     widget->setFont(interfaceFont(14, style == Action::Navigation ? QFont::Normal : QFont::Medium));
     if (style == Action::Primary || style == Action::Checkout) {
-        const auto background = style == Action::Checkout ? "#111111" : "#252525";
         widget->setStyleSheet(QString(
-            "QPushButton { background:%1; color:white; border:1px solid transparent; border-radius:%2px; }"
-            "QPushButton:hover { background:#363636; } QPushButton:pressed { background:#080808; }"
-            "QPushButton:focus { border:1px solid #888888; }"
+            "QPushButton { background:qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #CADDDD, stop:1 #111111); color:white; border:1px solid transparent; border-radius:%1px; }"
+            "QPushButton:hover { background:qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d9e8e8, stop:1 #292929); }"
+            "QPushButton:pressed { background:qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #a5b8b8, stop:1 #080808); }"
+            "QPushButton:focus { border:1px solid #ffffff; }"
             "QPushButton:disabled { background:#a0a0a0; color:white; }")
-            .arg(background).arg(style == Action::Checkout ? 14 : 8));
+            .arg(style == Action::Checkout ? 14 : 8));
+    } else if (style == Action::Hold) {
+        widget->setStyleSheet(
+            "QPushButton { color:#242424; background:white; border:1px solid #111111; border-radius:14px; }"
+            "QPushButton:hover { background:#f1f1f1; } QPushButton:pressed { background:#dedede; }"
+            "QPushButton:focus { border:2px solid #777777; }"
+            "QPushButton:disabled { color:#919191; border-color:#cccccc; background:#f5f5f5; }");
     } else if (style == Action::Navigation) {
         widget->setStyleSheet(
             "QPushButton { text-align:left; padding-left:19px; color:#171717; border:1px solid transparent; border-radius:8px; }"
@@ -785,7 +791,7 @@ public:
         label(order, {28, 753, 220, 24}, "Total payable", 20, ink, QFont::DemiBold);
         totals_[3] = label(order, {650, 753, 320, 24}, {}, 20, ink, QFont::Bold, right_);
         pay_ = action(order, {28, 801, 455, 44}, "Generate Bill", Action::Checkout);
-        hold_ = action(order, {515, 801, 455, 44}, "Generate Bill and Put on Hold", Action::Checkout);
+        hold_ = action(order, {515, 801, 455, 44}, "Generate Bill and Put on Hold", Action::Hold);
 
         auto* camera = surface(this, {1022, 0, 480, 350}, "#ffffff", "#e3e3e3");
         label(camera, {24, 24, 350, 24}, "Camera", 20, ink, QFont::DemiBold);
@@ -1613,25 +1619,6 @@ QString assetPath(const QString& filename)
     return QDir(QString::fromUtf8(EYERIS_SOURCE_ASSET_DIR)).filePath(filename);
 }
 
-QPixmap wordmarkPixmap()
-{
-    const QImage exported(assetPath("eyeris-wordmark.png"));
-    QImage transparent(exported.size(), QImage::Format_ARGB32);
-    if (exported.width() > 0) transparent.setDevicePixelRatio(exported.width() / 168.0);
-    const QColor wordmarkInk(ink);
-    for (int y = 0; y < exported.height(); ++y) {
-        for (int x = 0; x < exported.width(); ++x) {
-            const QRgb pixel = exported.pixel(x, y);
-            // The Figma text export is antialiased over white. Recover its coverage.
-            const int alpha = std::clamp((255 - qGray(pixel)) * qAlpha(pixel) /
-                                         (255 - wordmarkInk.red()), 0, 255);
-            transparent.setPixel(x, y, qRgba(wordmarkInk.red(), wordmarkInk.green(),
-                                             wordmarkInk.blue(), alpha));
-        }
-    }
-    return QPixmap::fromImage(transparent);
-}
-
 class Artwork final : public QWidget {
 public:
     Artwork(QWidget* parent, const QString& filename, int radius)
@@ -1748,13 +1735,17 @@ PosWindow::PosWindow(ProductService& products, BarcodeAssetService& images,
     new TitleBar(shell, *this);
     auto* sidebar = new Artwork(shell, "eyeris-sidebar-background.png", 21);
     sidebar->setGeometry(24, 64, 210, 958);
-    const QPixmap logo = wordmarkPixmap();
-    auto* wordmark = label(sidebar, {19, 29, 168, 48}, {}, 54, ink);
+    const QPixmap logo(assetPath("eyeris-wordmark.png"));
+    auto* wordmark = label(sidebar, {7, 16, 196, 74}, {}, 54, ink, QFont::Normal, Qt::AlignCenter);
     wordmark->setAccessibleName("Eyeris");
     if (logo.isNull()) {
         wordmark->setText("Eyeris");
     } else {
-        wordmark->setPixmap(logo);
+        const qreal pixelRatio = wordmark->devicePixelRatioF();
+        QPixmap scaled = logo.scaled(wordmark->size() * pixelRatio, Qt::KeepAspectRatio,
+                                     Qt::SmoothTransformation);
+        scaled.setDevicePixelRatio(pixelRatio);
+        wordmark->setPixmap(scaled);
     }
     const std::array<string, 3> destinations{"Current Order", "Order History", "Product Catalogue"};
     auto* pages = new QStackedWidget(shell);
