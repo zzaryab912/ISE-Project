@@ -11,6 +11,7 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDir>
+#include <QEvent>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QGraphicsDropShadowEffect>
@@ -27,6 +28,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QRegularExpressionValidator>
 #include <QScopedValueRollback>
 #include <QScreen>
 #include <QScrollArea>
@@ -84,11 +86,17 @@ Result<int64_t> fixedInput(const QString& input, int places)
 
 Result<int64_t> quantityInput(const QString& input, Unit unit)
 {
-    auto result = fixedInput(input, 3);
-    if (result.success && unit == Unit::Count && result.value % 1000 != 0) {
+    if (unit == Unit::Count && input.contains('.')) {
         return {false, "Enter a whole quantity for Count.", 0};
     }
-    return result;
+    return fixedInput(input, 3);
+}
+
+QRegularExpression quantityPattern(Unit unit)
+{
+    const QString whole = R"((?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+))";
+    return QRegularExpression("^" + whole +
+        (unit == Unit::Weight ? R"((?:\.[0-9]{1,3})?)" : "") + "$");
 }
 
 QString statusText(OrderStatus status)
@@ -684,7 +692,9 @@ public:
         value_->setGeometry(third, 1, third + 1, bounds.height() - 2);
         value_->setFont(interfaceFont(13, QFont::Normal));
         value_->setAlignment(Qt::AlignCenter);
-        value_->setAccessibleName("Quantity");
+        countValidator_ = new QRegularExpressionValidator(quantityPattern(Unit::Count), value_);
+        weightValidator_ = new QRegularExpressionValidator(quantityPattern(Unit::Weight), value_);
+        value_->installEventFilter(this);
         value_->setStyleSheet(
             "QLineEdit { background:transparent; color:#171717; padding:0; border:none;"
             " border-left:1px solid #e7e7e7; border-right:1px solid #e7e7e7; }"
@@ -710,6 +720,8 @@ public:
     {
         quantity_ = value;
         unit_ = unit;
+        value_->setValidator(unit == Unit::Count ? countValidator_ : weightValidator_);
+        value_->setAccessibleName(unit == Unit::Count ? "Quantity (items)" : "Quantity (kg)");
         value_->setText(quantityText(value, unit));
         value_->setFont(interfaceFont(unit == Unit::Weight ? 12 : 14, QFont::Medium));
     }
@@ -719,6 +731,18 @@ public:
     std::function<void(int64_t)> changed;
     std::function<void()> typing;
     std::function<void(const string&)> invalid;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == value_ && event->type() == QEvent::FocusOut && !value_->hasAcceptableInput()) {
+            const auto draft = read();
+            value_->setText(quantityText(quantity_, unit_));
+            if (typing) typing();
+            if (!draft.success && invalid) invalid(draft.message);
+        }
+        return QWidget::eventFilter(watched, event);
+    }
 
 private:
     void moveBy(int direction)
@@ -741,6 +765,8 @@ private:
     QPushButton* less_ = nullptr;
     QPushButton* more_ = nullptr;
     QLineEdit* value_ = nullptr;
+    QRegularExpressionValidator* countValidator_ = nullptr;
+    QRegularExpressionValidator* weightValidator_ = nullptr;
     Unit unit_ = Unit::Count;
     int64_t quantity_ = 0;
 };
@@ -777,6 +803,9 @@ public:
         rows_ = viewport(order, {28, 234, 942, 288});
         label(order, {28, 536, 210, 16}, "Contact (optional)", 13);
         contact_ = edit(order, {28, 557, 210, 39}, "Contact (optional)", "Enter contact");
+        contact_->setValidator(new QRegularExpressionValidator(
+            QRegularExpression(R"((?:\+?[0-9]{7,15})?)"), contact_));
+        contact_->setToolTip("7–15 digits, with an optional leading +.");
         payment_ = std::make_unique<PaymentFields>(order, 256, 536, 210, 18, 258, "Merchant name");
         billError_ = label(order, {28, 501, 942, 30}, {}, 14, muted);
         billError_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
@@ -857,7 +886,9 @@ public:
     {
         const auto name = name_->text().trimmed();
         if (name.isEmpty()) return {false, "Enter the customer's name.", {}};
-        return {true, {}, {name.toStdString(), contact_->text().trimmed().toStdString()}};
+        if (!contact_->hasAcceptableInput())
+            return {false, "Contact must contain 7–15 digits, with an optional leading +.", {}};
+        return {true, {}, {name.toStdString(), contact_->text().toStdString()}};
     }
 
     Result<Payment> readPayment() const override { return payment_->read(); }
@@ -897,6 +928,7 @@ public:
         productName_->setText(text(product.name));
         productName_->setToolTip(text(product.name));
         productPriceLabel_->setText("Price / " + unitShort(product.unit) + " (excl. tax)");
+        quantityLabel_->setText(product.unit == Unit::Count ? "Quantity (items)" : "Quantity (kg)");
         productPrice_->setText("PKR " + formattedMoney(product.unitPrice));
         const auto info = QStringList{
             "Product ID    " + text(product.id), "Acronym    " + text(product.acronym),
@@ -1256,7 +1288,7 @@ public:
             price = field(parent, 28, 283, 240, "Price / item (excl. tax)", {}, false, &priceCaption);
             tax = field(parent, 294, 283, 240, "Tax per unit (PKR)", "0.00");
             discount = field(parent, 560, 283, 240, "Discount per unit (PKR)", "0.00");
-            stock = field(parent, 28, 365, 240, "Available quantity");
+            stock = field(parent, 28, 365, 240, "Available quantity (items)", {}, false, &quantityCaption);
         } else {
             id = field(parent, 28, 105, 282, "Product ID", "Assigned on save", true);
             barcode = field(parent, 340, 105, 282, "Barcode value");
@@ -1270,7 +1302,36 @@ public:
             tax = field(parent, 340, 379, 282, "Tax per unit (PKR)", "0.00");
             discount = field(parent, 28, 467, 282, "Discount per unit (PKR)", "0.00");
         }
-        QObject::connect(unit, &QComboBox::currentIndexChanged, unit, [this] { updateLabels(); });
+        countValidator = new QRegularExpressionValidator(quantityPattern(Unit::Count), stock);
+        weightValidator = new QRegularExpressionValidator(quantityPattern(Unit::Weight), stock);
+        stock->setValidator(countValidator);
+        QObject::connect(stock, &QLineEdit::textChanged, stock, [this] {
+            if (currentUnit() == Unit::Count && stock->validator() == weightValidator &&
+                !stock->text().contains('.')) {
+                stock->setValidator(countValidator);
+                stock->setToolTip({});
+                updateLabels();
+            }
+        });
+        QObject::connect(unit, &QComboBox::currentIndexChanged, unit, [this] {
+            if (currentUnit() == Unit::Count) {
+                const auto draft = quantityInput(stock->text(), Unit::Weight);
+                if (stock->text().contains('.') && draft.success && draft.value % 1000 == 0)
+                    stock->setText(quantityText(draft.value, Unit::Count));
+                if (stock->text().contains('.')) {
+                    // Keep the draft editable until the fraction is removed or replaced.
+                    stock->setValidator(weightValidator);
+                    stock->setToolTip("Count requires whole items; replace the fractional stock quantity.");
+                } else {
+                    stock->setValidator(countValidator);
+                    stock->setToolTip({});
+                }
+            } else {
+                stock->setValidator(weightValidator);
+                stock->setToolTip({});
+            }
+            updateLabels();
+        });
         updateLabels();
     }
 
@@ -1329,7 +1390,8 @@ private:
         const Unit selectedUnit = currentUnit();
         const QString priceLabel = "Price / " + unitShort(selectedUnit) + " (excl. tax)";
         const QString quantityLabel = selectedUnit == Unit::Count
-            ? "Available quantity (items)" : "Available quantity (kg)";
+            ? (stock->text().contains('.') ? "Stock (items): remove fraction" : "Available quantity (items)")
+            : "Available quantity (kg)";
         priceCaption->setText(priceLabel);
         price->setAccessibleName(priceLabel);
         if (quantityCaption)
@@ -1345,6 +1407,8 @@ private:
     QLineEdit* stock = nullptr;
     QLabel* priceCaption = nullptr;
     QLabel* quantityCaption = nullptr;
+    QRegularExpressionValidator* countValidator = nullptr;
+    QRegularExpressionValidator* weightValidator = nullptr;
 };
 
 class CatalogueTabs final : public QTabWidget {

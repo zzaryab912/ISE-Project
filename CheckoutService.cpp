@@ -157,6 +157,14 @@ Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items,
     if (hasLineBreak(customer.name) || hasLineBreak(customer.contact)) {
         return {false, "Customer name and contact must each be on one line.", {}};
     }
+    const string_view contact = customer.contact;
+    const size_t firstDigit = !contact.empty() && contact.front() == '+' ? 1 : 0;
+    const size_t digitCount = contact.size() - firstDigit;
+    if (!contact.empty() && (digitCount < 7 || digitCount > 15 ||
+        !all_of(contact.begin() + firstDigit, contact.end(),
+                [](char c) { return c >= '0' && c <= '9'; }))) {
+        return {false, "Contact must contain 7–15 digits, with an optional leading +.", {}};
+    }
     if (!validTimestamp(timestamp)) {
         return {false, "Enter a valid date and time (YYYY-MM-DD and HH:mm:ss).", {}};
     }
