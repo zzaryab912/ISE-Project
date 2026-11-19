@@ -52,3 +52,6 @@ temp/
 
 # Local notes and scratch work
 /documentations/
+
+# Project-local POS data
+/data/

@@ -16,7 +16,7 @@ BarcodeAssetService::BarcodeAssetService(std::filesystem::path dataRoot)
 }
 
 std::filesystem::path BarcodeAssetService::imagePath(const string& barcode) const {
-    return dataRoot_ / (barcode + ".png");
+    return dataRoot_ / "barcodes" / (barcode + ".png");
 }
 
 /**
@@ -60,8 +60,8 @@ Result<string> BarcodeAssetService::save(const string& barcode) const {
         return result;
     }
 
-    // Construct the destination file path (e.g., "123456.png")
-    string filename = barcode + ".png";
+    // Construct the portable relative path and its destination.
+    string filename = "barcodes/" + barcode + ".png";
     const auto fullPath = imagePath(barcode);
     const QString destination = QString::fromStdString(fullPath.u8string());
     std::error_code fileError;
@@ -77,13 +77,18 @@ Result<string> BarcodeAssetService::save(const string& barcode) const {
         return {false, "A different image already exists at the barcode destination.", {}};
     }
 
+    std::filesystem::create_directories(fullPath.parent_path(), fileError);
+    if (fileError) {
+        return {false, "Could not create the barcode image directory: " + fileError.message(), {}};
+    }
+
     // Persist the image to disk using the standard I/O module
     bool saved = saveBarcodeImage(img, destination);
 
     if (saved) {
         result.success = true;
         result.message = "Barcode saved successfully.";
-        result.value = filename; // Return only the relative filename/path per specifications
+        result.value = filename;
     }
     else {
         result.success = false;

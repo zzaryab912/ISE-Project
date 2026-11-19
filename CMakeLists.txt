@@ -32,6 +32,7 @@ add_executable(Eyeris MACOSX_BUNDLE
 
 target_include_directories(Eyeris PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_compile_definitions(Eyeris PRIVATE
+    EYERIS_PROJECT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
     EYERIS_SOURCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
 target_link_libraries(Eyeris PRIVATE Qt6::Widgets Qt6::Svg ${OpenCV_LIBS})

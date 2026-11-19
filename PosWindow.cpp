@@ -34,7 +34,6 @@
 #include <QScrollArea>
 #include <QScrollBar>
 #include <QStackedWidget>
-#include <QStandardPaths>
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QSvgRenderer>
@@ -189,6 +188,37 @@ QWidget* surface(QWidget* parent, QRect bounds, const char* fill = "#ffffff",
     return widget;
 }
 
+class PanelShadow final : public QWidget {
+public:
+    PanelShadow(QWidget* parent, QRect bounds) : QWidget(parent)
+    {
+        setGeometry(bounds.adjusted(-5, -5, 5, 7));
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_NoSystemBackground);
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setBrush(Qt::NoBrush);
+        const QRectF card(5, 5, width() - 10, height() - 12);
+        for (int spread = 4; spread >= 1; --spread) {
+            painter.setPen(QPen(QColor(0, 0, 0, spread == 1 ? 5 : 3), 1));
+            painter.drawRoundedRect(card.adjusted(-spread, -spread + 2, spread, spread + 2),
+                                    21 + spread, 21 + spread);
+        }
+    }
+};
+
+QWidget* panel(QWidget* parent, QRect bounds, const char* fill = "#ffffff",
+               const char* border = "#e7e7e7")
+{
+    new PanelShadow(parent, bounds);
+    return surface(parent, bounds, fill, border);
+}
+
 void rule(QWidget* parent, int x, int y, int width, const char* color = "#e7e7e7")
 {
     auto* line = new QWidget(parent);
@@ -270,7 +300,8 @@ void markSelected(QPushButton& button, bool selected)
     button.update();
 }
 
-QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action style = Action::Secondary)
+QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action style = Action::Secondary,
+                    bool secondaryShadow = false)
 {
     auto* widget = new QPushButton(title, parent);
     widget->setGeometry(bounds);
@@ -283,7 +314,7 @@ QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action 
             "QPushButton:pressed { background:qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #a5b8b8, stop:1 #080808); }"
             "QPushButton:focus { border:1px solid #ffffff; }"
             "QPushButton:disabled { background:#a0a0a0; color:white; }")
-            .arg(style == Action::Checkout ? 14 : 8));
+            .arg(bounds.height() / 2));
     } else if (style == Action::Hold) {
         widget->setStyleSheet(
             "QPushButton { color:#242424; background:white; border:1px solid #111111; border-radius:14px; }"
@@ -306,6 +337,13 @@ QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action 
             "QPushButton:hover { background:#f6f6f6; } QPushButton:pressed { background:#ededed; }"
             "QPushButton:focus { border-color:#878787; }"
             "QPushButton:disabled { color:#919191; border-color:#eeeeee; }");
+    }
+    if (style == Action::Primary || style == Action::Checkout || style == Action::Hold || secondaryShadow) {
+        auto* shadow = new QGraphicsDropShadowEffect(widget);
+        shadow->setBlurRadius(8);
+        shadow->setOffset(0, 2);
+        shadow->setColor(QColor(0, 0, 0, 16));
+        widget->setGraphicsEffect(shadow);
     }
     return widget;
 }
@@ -752,7 +790,7 @@ private:
             if (invalid) invalid(value.message);
             return;
         }
-        const int64_t step = unit_ == Unit::Count ? 1000 : 1;
+        const int64_t step = unit_ == Unit::Count ? 1000 : 500;
         if (direction > 0 && value.value > std::numeric_limits<int64_t>::max() - step) {
             if (invalid) invalid("The quantity is too large.");
             return;
@@ -780,7 +818,7 @@ public:
         headingFont.setStretch(99);
         heading->setFont(headingFont);
         label(this, {0, 42, 520, 17}, "Scan products to build your order", 14, muted);
-        auto* order = surface(this, {0, 88, 998, 870}, "#ffffff", "#e3e3e3");
+        auto* order = panel(this, {0, 88, 998, 870}, "#ffffff", "#e3e3e3");
         label(order, {28, 26, 300, 24}, "Order items", 20, ink, QFont::DemiBold);
         count_ = label(order, {28, 56, 600, 16}, {}, 13, muted);
         label(order, {750, 35, 220, 16}, "All prices in PKR", 13, muted, QFont::Normal, right_);
@@ -822,7 +860,7 @@ public:
         pay_ = action(order, {28, 801, 455, 44}, "Generate Bill", Action::Checkout);
         hold_ = action(order, {515, 801, 455, 44}, "Generate Bill and Put on Hold", Action::Hold);
 
-        auto* camera = surface(this, {1022, 0, 480, 350}, "#ffffff", "#e3e3e3");
+        auto* camera = panel(this, {1022, 0, 480, 350}, "#ffffff", "#e3e3e3");
         label(camera, {24, 24, 350, 24}, "Camera", 20, ink, QFont::DemiBold);
         label(camera, {24, 54, 350, 16}, "Camera preview", 13, muted);
         preview_ = new CameraFeed(camera, {24, 88, 432, 202});
@@ -832,7 +870,7 @@ public:
         previewStatus_->setWordWrap(true);
         scannerMessage_ = label(camera, {24, 311, 432, 16}, "Scanning while Current Order is open", 13, muted);
 
-        auto* product = surface(this, {1022, 370, 480, 588}, "#ffffff", "#e3e3e3");
+        auto* product = panel(this, {1022, 370, 480, 588}, "#ffffff", "#e3e3e3");
         label(product, {24, 24, 430, 24}, "Scanned product", 20, ink, QFont::DemiBold);
         productName_ = label(product, {24, 68, 432, 39}, "Scan a barcode to select a product.",
                              18, ink, QFont::DemiBold, Qt::AlignLeft | Qt::AlignTop);
@@ -1099,15 +1137,15 @@ public:
     {
         label(this, {0, 6, 600, 33}, "Order History", 28, detailInk, QFont::DemiBold);
         label(this, {0, 44, 600, 16}, "Past orders and saved bills", 13, detailMuted);
-        auto* list = surface(this, {0, 73, 650, 885});
+        auto* list = panel(this, {0, 73, 650, 885});
         panelTitle(list, 24, "Past orders", "Select an order to view its saved bill");
         rule(list, 24, 88, 602);
         orders_ = viewport(list, {16, 105, 618, 740});
-        auto* bill = surface(this, {674, 73, 828, 885});
+        auto* bill = panel(this, {674, 73, 828, 885});
         bill_ = viewport(bill, {0, 0, 820, 780});
         error_ = label(bill, {28, 760, 772, 34}, {}, 14, detailMuted);
         error_->setWordWrap(true);
-        archive_ = action(bill, {28, 805, 120, 42}, "Archive");
+        archive_ = action(bill, {28, 805, 120, 42}, "Archive", Action::Secondary, true);
         pay_ = action(bill, {631, 805, 169, 42}, "Mark as Paid", Action::Primary);
         connect(pay_, &QPushButton::clicked, &window, &PosWindow::onMarkPaidClicked);
         connect(archive_, &QPushButton::clicked, &window, &PosWindow::onArchiveClicked);
@@ -1446,7 +1484,7 @@ public:
         });
         updateTabs(0);
 
-        auto* list = surface(view, {0, 0, 650, 834});
+        auto* list = panel(view, {0, 0, 650, 834});
         panelTitle(list, 24, "Products", "Select a product to view and edit its details");
         auto* createLink = action(list, {486, 20, 140, 42}, "Add Product", Action::Primary);
         connect(createLink, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(1); });
@@ -1456,7 +1494,7 @@ public:
         label(list, {486, 105, 132, 16}, "Unit price", 13, detailMuted, QFont::Medium, alignRight);
         products_ = viewport(list, {16, 137, 618, 650});
 
-        details_ = surface(view, {674, 0, 828, 834});
+        details_ = panel(view, {674, 0, 828, 834});
         panelTitle(details_, 28, "Product details", "Edit product details and available quantity");
         status_ = label(details_, {680, 26, 120, 14}, {}, 12, detailMuted, QFont::Normal, alignRight);
         rule(details_, 28, 84, 772);
@@ -1469,8 +1507,8 @@ public:
         rule(details_, 28, 716, 772);
         editError_ = label(details_, {28, 665, 772, 42}, {}, 14, detailMuted);
         editError_->setWordWrap(true);
-        remove_ = action(details_, {28, 750, 150, 42}, "Delete Product");
-        cancel_ = action(details_, {513, 750, 112, 42}, "Cancel");
+        remove_ = action(details_, {28, 750, 150, 42}, "Delete Product", Action::Secondary, true);
+        cancel_ = action(details_, {513, 750, 112, 42}, "Cancel", Action::Secondary, true);
         update_ = action(details_, {637, 750, 163, 42}, "Save Changes", Action::Primary);
         connect(cancel_, &QPushButton::clicked, this, [this] {
             if (selected_) {
@@ -1483,19 +1521,19 @@ public:
         noProduct_ = label(details_, {28, 23, 772, 30},
                            "Select a product to view its details.", 14, detailMuted);
 
-        auto* form = surface(add, {0, 0, 650, 834});
+        auto* form = panel(add, {0, 0, 650, 834});
         panelTitle(form, 28, "Add product", "Enter product details and generate its barcode");
         rule(form, 28, 84, 594);
         create_ = std::make_unique<ProductFields>(form, false);
         rule(form, 28, 694, 594);
         addError_ = label(form, {28, 640, 594, 46}, {}, 14, detailMuted);
         addError_->setWordWrap(true);
-        auto* preview = action(form, {28, 733, 190, 42}, "Generate Barcode");
+        auto* preview = action(form, {28, 733, 190, 42}, "Generate Barcode", Action::Secondary, true);
         auto* save = action(form, {462, 733, 160, 42}, "Save Product", Action::Primary);
         connect(preview, &QPushButton::clicked, &window, &PosWindow::onGeneratePreview);
         connect(save, &QPushButton::clicked, &window, &PosWindow::onSaveProduct);
 
-        auto* draft = surface(add, {674, 0, 828, 834});
+        auto* draft = panel(add, {674, 0, 828, 834});
         label(draft, {28, 24, 680, 24}, "Generated barcode", 20, detailInk, QFont::DemiBold);
         draftStatus_ = label(draft, {28, 54, 772, 16}, "Enter a barcode and generate a preview.", 13, detailMuted);
         rule(draft, 28, 84, 772);
@@ -1571,7 +1609,7 @@ public:
         details_->setEnabled(true);
         status_->setText(product.available == 0 ? "Out of stock" : "");
         setHeldReference(false);
-        const QDir root(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        const QDir root(QString::fromUtf8(EYERIS_PROJECT_DATA_DIR));
         savedImage_->set(QImage(root.filePath(text(product.barcodeImagePath))), text(product.barcode));
         showMetadata(*info_, 456, text(product.barcodeImagePath), false);
     }
@@ -1604,7 +1642,7 @@ public:
     void showSavedProduct(const Product& product) override
     {
         create_->id->setText(text(product.id));
-        const QDir root(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation));
+        const QDir root(QString::fromUtf8(EYERIS_PROJECT_DATA_DIR));
         const QImage barcode(root.filePath(text(product.barcodeImagePath)));
         if (!barcode.isNull()) {
             newImage_->set(barcode, text(product.barcode));
@@ -1800,7 +1838,7 @@ PosWindow::PosWindow(ProductService& products, BarcodeAssetService& images,
     auto* sidebar = new Artwork(shell, "eyeris-sidebar-background.png", 21);
     sidebar->setGeometry(24, 64, 210, 958);
     const QPixmap logo(assetPath("eyeris-wordmark.png"));
-    auto* wordmark = label(sidebar, {7, 16, 196, 74}, {}, 54, ink, QFont::Normal, Qt::AlignCenter);
+    auto* wordmark = label(sidebar, {19, 29, 168, 48}, {}, 54, ink, QFont::Normal, Qt::AlignCenter);
     wordmark->setAccessibleName("Eyeris");
     if (logo.isNull()) {
         wordmark->setText("Eyeris");

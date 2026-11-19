@@ -357,7 +357,9 @@ sequenceDiagram
 
 ## Data Storage & File Formats
 
-All files are UTF-8 plain text, one record per line. Fields are separated by spaces, and string fields are wrapped in double quotes with `std::quoted`. Records end with `#` (except `OrderDetail.txt`). Storage is hidden behind the `IPosStore` interface, so the file format can change without touching the services.
+Eyeris keeps `Product.txt`, `Order.txt`, `OrderDetail.txt`, and `Bill.txt` in the checkout's `data/` folder. Product PNGs are under `data/barcodes/`. The path saved in `Product.txt` is relative to `data/`. Git ignores this runtime folder.
+
+The four record files are UTF-8 plain text, one record per line. Fields are separated by spaces, and string fields are wrapped in double quotes with `std::quoted`. Records end with `#` (except `OrderDetail.txt`). Storage is hidden behind the `IPosStore` interface, so the file format can change without touching the services.
 
 **Units:** money is stored in **paisas** (`45000` = PKR 450.00). Quantities and stock are stored in **thousandths** (`50000` = 50 items, `1500` = 1.5 kg).
 
@@ -370,7 +372,7 @@ All files are UTF-8 plain text, one record per line. Fields are separated by spa
 Example:
 
 ```text
-"P001" "123456" "TEA-BLK" "Black Tea 250g" count 45000 7650 0 50000 "assets/barcode-123456.png" #
+"100001" "123456" "TEA-BLK" "Black Tea 250g" count 450.00 76.50 0.00 50 "barcodes/123456.png" #
 ```
 
 ### `Order.txt`
