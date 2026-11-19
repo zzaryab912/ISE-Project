@@ -62,6 +62,7 @@ public:
         using QWidget::QWidget;
         virtual Result<Customer> readCustomer() const = 0;
         virtual Result<Payment> readPayment() const = 0;
+        virtual void resetCheckoutFields() = 0;
         virtual Result<int64_t> readAddQuantity() const = 0;
         virtual void showCameraPreview(const QImage& image) = 0;
         virtual void showScannerMessage(const string& message) = 0;

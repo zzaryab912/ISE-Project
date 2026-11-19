@@ -131,6 +131,24 @@ constexpr char zoomSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visib
 <circle id="Zoom" cx="6" cy="6" r="6" fill="#28C840"/>
 </svg>)svg";
 
+// Original Figma wordmark outlines, with the gradient from the supplied wordmark.
+constexpr char wordmarkSvg[] = R"svg(<svg width="168" height="48" viewBox="0 0 168 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <linearGradient id="wordmarkColor" gradientUnits="userSpaceOnUse" x1="0" x2="0" y1="0" y2="48">
+    <stop offset="0" stop-color="#515756"/>
+    <stop offset="0.5" stop-color="#9CA8A8"/>
+    <stop offset="1" stop-color="#DEEFEF"/>
+  </linearGradient>
+</defs>
+<path d="M0 38.2061V0.158203H33.0908V4.9043H5.58984V16.4795H31.2715V21.0674H5.58984V33.46H33.0908V38.2061H0Z
+M43.2686 47.4609C42.6182 47.4609 41.9854 47.4346 41.3701 47.3818C40.7549 47.3291 40.21 47.25 39.7354 47.1445V42.8467C40.1221 42.917 40.5615 42.9785 41.0537 43.0312C41.5459 43.1016 42.0557 43.1367 42.583 43.1367C44.165 43.1367 45.4922 42.8818 46.5645 42.3721C47.6367 41.8623 48.5684 40.9395 49.3594 39.6035L50.1504 38.1533L36.2549 10.6523H42.0557L53.6045 34.2246L52.3125 33.2227H54.1318L52.8398 34.2246L63.8613 10.6523H69.6357L55.9512 38.6016C54.8438 40.7812 53.71 42.5215 52.5498 43.8223C51.3896 45.123 50.0713 46.0547 48.5947 46.6172C47.1182 47.1797 45.3428 47.4609 43.2686 47.4609Z
+M87.1963 38.8125C83.7334 38.8125 80.7539 38.25 78.2578 37.125C75.7617 36 73.8457 34.374 72.5098 32.2471C71.1738 30.1201 70.5059 27.5449 70.5059 24.5215V24.4951C70.5059 21.5771 71.1826 19.0371 72.5361 16.875C73.9072 14.6953 75.8057 13.0078 78.2314 11.8125C80.6748 10.6172 83.5312 10.0371 86.8008 10.0723C90.1055 10.0898 92.9355 10.7051 95.291 11.918C97.6641 13.1133 99.4746 14.792 100.723 16.9541C101.988 19.1162 102.621 21.6475 102.621 24.5479V25.8398H73.2217V21.9639H99.3516L97.3213 25.1016V23.5723C97.3213 21.6914 96.8906 20.0742 96.0293 18.7207C95.1855 17.3496 93.9814 16.2949 92.417 15.5566C90.8525 14.8184 88.9805 14.4492 86.8008 14.4492C84.5156 14.4492 82.5557 14.8096 80.9209 15.5303C79.3037 16.251 78.0645 17.3232 77.2031 18.7471C76.3418 20.1709 75.9111 21.9375 75.9111 24.0469V24.917C75.9111 27.2373 76.4297 29.0918 77.4668 30.4805C78.5039 31.8691 79.8838 32.8799 81.6064 33.5127C83.3467 34.1279 85.2539 34.4355 87.3281 34.4355C88.7695 34.4355 90.123 34.2773 91.3887 33.9609C92.6543 33.6445 93.7529 33.1875 94.6846 32.5898C95.6162 31.9922 96.3018 31.2539 96.7412 30.375L96.8203 30.1641H102.173L102.094 30.4277C101.654 31.7988 100.969 33.0117 100.037 34.0664C99.1055 35.1035 97.9805 35.9736 96.6621 36.6768C95.3438 37.3799 93.8848 37.9072 92.2852 38.2588C90.6855 38.6279 88.9893 38.8125 87.1963 38.8125Z
+M107.13 38.2061V10.6523L112.509 10.6787V16.1367H112.667C113.3 14.2734 114.425 12.8057 116.042 11.7334C117.677 10.6611 119.637 10.125 121.922 10.125C122.432 10.125 122.906 10.1514 123.346 10.2041C123.803 10.2393 124.189 10.292 124.506 10.3623V15.2139C124.102 15.1436 123.627 15.0908 123.082 15.0557C122.537 15.0029 121.957 14.9766 121.342 14.9766C119.549 14.9766 117.993 15.3281 116.675 16.0312C115.356 16.7344 114.328 17.7539 113.59 19.0898C112.869 20.4082 112.509 21.999 112.509 23.8623V38.2061H107.13Z
+M128.355 38.2061V10.6523H133.734V38.2061H128.355Z
+M131.045 6.22266C130.131 6.22266 129.357 5.92383 128.725 5.32617C128.109 4.71094 127.802 3.97266 127.802 3.11133C127.802 2.23242 128.109 1.49414 128.725 0.896484C129.357 0.298828 130.131 0 131.045 0C131.977 0 132.75 0.298828 133.365 0.896484C133.98 1.49414 134.288 2.23242 134.288 3.11133C134.288 3.97266 133.98 4.71094 133.365 5.32617C132.75 5.92383 131.977 6.22266 131.045 6.22266Z
+M153.826 38.8125C150.732 38.8125 148.096 38.4873 145.916 37.8369C143.736 37.1689 142.031 36.2109 140.801 34.9629C139.588 33.6973 138.858 32.1768 138.612 30.4014L138.586 30.1904H143.965L144.018 30.4014C144.352 31.8076 145.336 32.8799 146.971 33.6182C148.605 34.3389 150.926 34.6992 153.932 34.6992C155.725 34.6992 157.236 34.541 158.467 34.2246C159.715 33.8906 160.655 33.416 161.288 32.8008C161.921 32.168 162.237 31.4121 162.237 30.5332V30.5068C162.237 29.4521 161.824 28.6611 160.998 28.1338C160.189 27.5889 158.757 27.1934 156.7 26.9473L149.001 26.1299C146.892 25.8662 145.125 25.4092 143.701 24.7588C142.295 24.1084 141.231 23.2646 140.511 22.2275C139.808 21.1904 139.456 19.96 139.456 18.5361V18.5098C139.456 16.7695 139.983 15.2666 141.038 14.001C142.11 12.7354 143.64 11.7598 145.626 11.0742C147.612 10.3887 149.977 10.0459 152.719 10.0459C155.637 10.0459 158.124 10.3887 160.181 11.0742C162.255 11.7422 163.863 12.6914 165.006 13.9219C166.148 15.1523 166.79 16.6201 166.931 18.3252L166.957 18.668H161.868L161.842 18.5098C161.631 17.1738 160.734 16.1191 159.152 15.3457C157.57 14.5723 155.443 14.1855 152.771 14.1855C151.066 14.1855 149.625 14.3525 148.447 14.6865C147.287 15.0029 146.408 15.4688 145.811 16.084C145.213 16.6816 144.914 17.4023 144.914 18.2461V18.2725C144.914 18.9404 145.099 19.5117 145.468 19.9863C145.854 20.4609 146.452 20.8477 147.261 21.1465C148.087 21.4453 149.168 21.6826 150.504 21.8584L158.229 22.6758C161.604 23.0801 164.03 23.8799 165.507 25.0752C166.983 26.2705 167.722 27.9668 167.722 30.1641V30.1904C167.722 31.9658 167.168 33.4951 166.061 34.7783C164.953 36.0615 163.362 37.0547 161.288 37.7578C159.214 38.4609 156.727 38.8125 153.826 38.8125Z" fill="url(#wordmarkColor)"/>
+</svg>)svg";
+
 constexpr int canvasWidth = 1784;
 constexpr int canvasHeight = 1054;
 constexpr int pageLeft = 258;
@@ -307,7 +325,8 @@ QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action 
     widget->setGeometry(bounds);
     widget->setCursor(Qt::PointingHandCursor);
     widget->setFont(interfaceFont(14, style == Action::Navigation ? QFont::Normal : QFont::Medium));
-    if (style == Action::Primary || style == Action::Checkout) {
+    const bool colored = style == Action::Primary || style == Action::Checkout;
+    if (colored) {
         widget->setStyleSheet(QString(
             "QPushButton { background:qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #CADDDD, stop:1 #111111); color:white; border:1px solid transparent; border-radius:%1px; }"
             "QPushButton:hover { background:qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #d9e8e8, stop:1 #292929); }"
@@ -338,11 +357,11 @@ QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action 
             "QPushButton:focus { border-color:#878787; }"
             "QPushButton:disabled { color:#919191; border-color:#eeeeee; }");
     }
-    if (style == Action::Primary || style == Action::Checkout || style == Action::Hold || secondaryShadow) {
+    if (colored || style == Action::Hold || secondaryShadow) {
         auto* shadow = new QGraphicsDropShadowEffect(widget);
-        shadow->setBlurRadius(8);
-        shadow->setOffset(0, 2);
-        shadow->setColor(QColor(0, 0, 0, 16));
+        shadow->setBlurRadius(colored ? 12 : 8);
+        shadow->setOffset(0, colored ? 3 : 2);
+        shadow->setColor(QColor(0, 0, 0, colored ? 48 : 16));
         widget->setGraphicsEffect(shadow);
     }
     return widget;
@@ -697,6 +716,13 @@ public:
     void setAmount(int64_t money) { amount->setText(formattedMoney(money)); }
     void clearAmount() { amount->clear(); }
 
+    void reset()
+    {
+        clearAmount();
+        mode->setCurrentIndex(mode->findData(static_cast<int>(PaymentMode::Cash)));
+        merchant->clear();
+    }
+
 private:
     QLineEdit* amount = nullptr;
     QComboBox* mode = nullptr;
@@ -930,6 +956,13 @@ public:
     }
 
     Result<Payment> readPayment() const override { return payment_->read(); }
+
+    void resetCheckoutFields() override
+    {
+        name_->clear();
+        contact_->clear();
+        payment_->reset();
+    }
 
     Result<int64_t> readAddQuantity() const override
     {
@@ -1231,19 +1264,23 @@ public:
         contact->setFixedHeight(contactHeight);
         int y = 181 + std::max(customerHeight, contactHeight) - 17;
         rule(content, 28, y, 772);
-        label(content, {28, y + 16, 264, 16}, "Acronym", 13, detailInk, QFont::Medium);
-        label(content, {316, y + 16, 100, 16}, "Unit price", 13, detailInk, QFont::Medium, alignRight);
-        label(content, {316, y + 34, 100, 13}, "(excl. tax)", 11, detailMuted, QFont::Normal, alignRight);
-        label(content, {434, y + 16, 108, 16}, "Discount / unit", 13, detailInk, QFont::Medium, alignRight);
-        label(content, {560, y + 16, 42, 16}, "Qty", 13, detailInk, QFont::Medium, alignRight);
+        const QRect acronymColumn(28, 0, 268, 17);
+        const QRect priceColumn(300, 0, 150, 17);
+        const QRect discountColumn(470, 0, 155, 17);
+        const QRect quantityColumn(643, 0, 157, 17);
+        label(content, acronymColumn.translated(0, y + 16), "Acronym", 13, detailInk, QFont::Medium);
+        label(content, priceColumn.translated(0, y + 16), "Unit price", 13, detailInk, QFont::Medium, alignRight);
+        label(content, priceColumn.translated(0, y + 32), "(excl. tax)", 11, detailMuted, QFont::Normal, alignRight);
+        label(content, discountColumn.translated(0, y + 16), "Discount / unit", 13, detailInk, QFont::Medium, alignRight);
+        label(content, quantityColumn.translated(0, y + 16), "Qty", 13, detailInk, QFont::Medium, alignRight);
         y += 66;
         for (const SaleLine& line : order.lines) {
-            label(content, {28, y, 260, 14}, text(line.acronym), 12, detailMuted);
-            label(content, {316, y, 100, 17}, formattedMoney(line.unitPrice), 14,
+            label(content, acronymColumn.translated(0, y), text(line.acronym), 12, detailMuted);
+            label(content, priceColumn.translated(0, y), formattedMoney(line.unitPrice), 14,
                   detailInk, QFont::Normal, alignRight);
-            label(content, {434, y, 108, 17}, formattedMoney(line.discountPerUnit), 14,
+            label(content, discountColumn.translated(0, y), formattedMoney(line.discountPerUnit), 14,
                   detailInk, QFont::Normal, alignRight);
-            label(content, {548, y, 54, 17}, ordinaryQuantity(line.quantity), 14,
+            label(content, quantityColumn.translated(0, y), ordinaryQuantity(line.quantity), 14,
                   detailInk, QFont::Normal, alignRight);
             y += 55;
         }
@@ -1837,18 +1874,9 @@ PosWindow::PosWindow(ProductService& products, BarcodeAssetService& images,
     new TitleBar(shell, *this);
     auto* sidebar = new Artwork(shell, "eyeris-sidebar-background.png", 21);
     sidebar->setGeometry(24, 64, 210, 958);
-    const QPixmap logo(assetPath("eyeris-wordmark.png"));
-    auto* wordmark = label(sidebar, {19, 29, 168, 48}, {}, 54, ink, QFont::Normal, Qt::AlignCenter);
+    auto* wordmark = new SvgIcon(sidebar, {19, 29, 168, 48}, wordmarkSvg);
+    wordmark->setObjectName("eyerisWordmark");
     wordmark->setAccessibleName("Eyeris");
-    if (logo.isNull()) {
-        wordmark->setText("Eyeris");
-    } else {
-        const qreal pixelRatio = wordmark->devicePixelRatioF();
-        QPixmap scaled = logo.scaled(wordmark->size() * pixelRatio, Qt::KeepAspectRatio,
-                                     Qt::SmoothTransformation);
-        scaled.setDevicePixelRatio(pixelRatio);
-        wordmark->setPixmap(scaled);
-    }
     const std::array<string, 3> destinations{"Current Order", "Order History", "Product Catalogue"};
     auto* pages = new QStackedWidget(shell);
     pages->setGeometry(pageLeft, 64, pageWidth, 958);
@@ -2063,6 +2091,7 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
 
     cart_.clear();
     addQuantity_ = 0;
+    view.resetCheckoutFields();
     view.resetAddQuantity();
     view.showCartError(refreshCart());
     view.setBillSaving(false);
