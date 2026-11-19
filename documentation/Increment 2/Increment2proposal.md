@@ -150,6 +150,7 @@ Functions with no parameters read the appropriate fields from the page.
 | onOrderSelected | `const std::string& orderId` | Display the saved bill contents and the order date/time in the right column. | `void` |
 | onMarkPaidClicked | None | Pass selected order ID/payment to markPaid. | `void` |
 | onArchiveClicked | None | Archive selected order and refresh list. | `void` |
+| showHistoryTab | `bool archived` | Switch between active order history and the read-only Archives tab. | `void` |
 | onProductSelected | `const std::string& productId` | Display specifications, barcode image, filename and path. | `void` |
 | onGeneratePreview | None | Generate the add-form barcode image. | `void` |
 | onSaveProduct | None | Send completed Product to create. | `void` |
@@ -346,11 +347,12 @@ For **Paid**, payment is recorded and stock is deducted through P2 in the same d
 | --- | --- | --- | --- |
 | HistoryService — constructor | `IPosStore& store`; `ProductService& products` | Keep references. | No return type — constructor. |
 | list | None | Retrieve non-archived orders/bills. | `Result<std::vector<SaleRecord>>` |
+| listArchived | None | Retrieve archived orders and their saved bills. | `Result<std::vector<SaleRecord>>` |
 | get | `const std::string& orderId` | Retrieve the saved bill and its order date/time, without rebuilding prices from the catalogue. | `Result<SaleRecord>` |
 | markPaid | `const std::string& orderId`; `const Payment& payment` | Recheck stock, deduct once, save payment/status. Preserve IDs, items and saved financial values. | `Result<SaleRecord>` |
 | archive | `const std::string& orderId` | Archive/hide order, retaining records and stock. | `Status` |
 
-Marking an already-paid order with identical payment details returns success and the existing SaleRecord without another deduction. Different payment details return failure without changes. Archived orders cannot be marked paid. Archiving an already-archived record returns success without changes. **An on-hold bill cannot be edited:** its items, quantities and saved charges stay fixed. Mark as Paid performs a fresh stock check, records payment and changes status using the same order/bill IDs; it does not reprice the bill. Archive remains available. History is otherwise read-only; no resume, search, filters or restore feature is included.
+Marking an already-paid order with identical payment details returns success and the existing SaleRecord without another deduction. Different payment details return failure without changes. Archived orders cannot be marked paid. Archiving an already-archived record returns success without changes. **An on-hold bill cannot be edited:** its items, quantities and saved charges stay fixed. Mark as Paid performs a fresh stock check, records payment and changes status using the same order/bill IDs; it does not reprice the bill. Archive remains available on active orders. The Archives tab shows saved archived bills and their payment state in a read-only view.
 
 ### Common boundary outcomes
 

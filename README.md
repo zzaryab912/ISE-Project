@@ -207,7 +207,7 @@ There are two roles. The **Cashier** operates the register (Current Order and Or
 
 1. **Inspect.** The centre list shows every non-archived order (Order ID, customer, date / time, payable amount, status `Paid` or `OnHold`). Click one to see its saved bill in the right panel.
 2. **Mark as Paid (held orders).** Select an `OnHold` order, enter the Payment Mode, Merchant, and Amount, and click **Mark as Paid**. A fresh live stock check runs first. If stock is available, it is deducted and the order becomes `Paid` under its original Order ID and Bill ID.
-3. **Archive.** Click **Archive** to set the status to `Archived` and hide the order from the active list. Its records stay on disk.
+3. **Archive.** Click **Archive** to move the order from History to the Archives tab. The original bill and payment status remain available there for read-only inspection.
 
 ### Page 3: Product Catalogue (Store Manager)
 

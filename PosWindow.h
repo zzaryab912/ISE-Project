@@ -80,6 +80,8 @@ public:
     public:
         using QWidget::QWidget;
         virtual Result<Payment> readPayment() const = 0;
+        virtual bool showingArchives() const = 0;
+        virtual void setArchiveView(bool archived) = 0;
         virtual void showError(const string& message) = 0;
         virtual void showOrders(const vector<SaleRecord>& orders, const string& selectedId) = 0;
         virtual void showBill(const SaleRecord& order) = 0;
@@ -117,6 +119,7 @@ public:
     void onOrderSelected(const string& orderId);                                // loads and displays the saved bill for the order id
     void onMarkPaidClicked();
     void onArchiveClicked();
+    void showHistoryTab(bool archived);
     void onProductSelected(const string& productId);                            // displays the details on the selected product
     void onGeneratePreview();
     void onSaveProduct();

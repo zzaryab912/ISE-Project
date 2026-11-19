@@ -359,9 +359,9 @@ QPushButton* action(QWidget* parent, QRect bounds, const QString& title, Action 
     }
     if (colored || style == Action::Hold || secondaryShadow) {
         auto* shadow = new QGraphicsDropShadowEffect(widget);
-        shadow->setBlurRadius(colored ? 12 : 8);
-        shadow->setOffset(0, colored ? 3 : 2);
-        shadow->setColor(QColor(0, 0, 0, colored ? 48 : 16));
+        shadow->setBlurRadius(colored ? 14 : 8);
+        shadow->setOffset(0, colored ? 4 : 2);
+        shadow->setColor(QColor(0, 0, 0, colored ? 64 : 16));
         widget->setGraphicsEffect(shadow);
     }
     return widget;
@@ -1170,18 +1170,29 @@ public:
     {
         label(this, {0, 6, 600, 33}, "Order History", 28, detailInk, QFont::DemiBold);
         label(this, {0, 44, 600, 16}, "Past orders and saved bills", 13, detailMuted);
-        auto* list = panel(this, {0, 73, 650, 885});
-        panelTitle(list, 24, "Past orders", "Select an order to view its saved bill");
+        historyTab_ = action(this, {0, 64, 72, 32}, "History", Action::Text);
+        archivesTab_ = action(this, {99, 64, 81, 32}, "Archives", Action::Text);
+        rule(this, 0, 103, 1502);
+        tabUnderline_ = new QWidget(this);
+        tabUnderline_->setStyleSheet("background:#252525; border-radius:1px;");
+        tabUnderline_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        connect(historyTab_, &QPushButton::clicked, this, [&window] { window.showHistoryTab(false); });
+        connect(archivesTab_, &QPushButton::clicked, this, [&window] { window.showHistoryTab(true); });
+
+        auto* list = panel(this, {0, 118, 650, 840});
+        listTitle_ = label(list, {24, 23, 450, 24}, "Past orders", 20, detailInk, QFont::DemiBold);
+        label(list, {24, 53, 530, 16}, "Select an order to view its saved bill", 13, detailMuted);
         rule(list, 24, 88, 602);
-        orders_ = viewport(list, {16, 105, 618, 740});
-        auto* bill = panel(this, {674, 73, 828, 885});
-        bill_ = viewport(bill, {0, 0, 820, 780});
-        error_ = label(bill, {28, 760, 772, 34}, {}, 14, detailMuted);
+        orders_ = viewport(list, {16, 105, 618, 695});
+        auto* bill = panel(this, {674, 118, 828, 840});
+        bill_ = viewport(bill, {0, 0, 820, billViewportHeight});
+        error_ = label(bill, {28, 715, 772, 34}, {}, 14, detailMuted);
         error_->setWordWrap(true);
-        archive_ = action(bill, {28, 805, 120, 42}, "Archive", Action::Secondary, true);
-        pay_ = action(bill, {631, 805, 169, 42}, "Mark as Paid", Action::Primary);
+        archive_ = action(bill, {28, 760, 120, 42}, "Archive", Action::Secondary, true);
+        pay_ = action(bill, {631, 760, 169, 42}, "Mark as Paid", Action::Primary);
         connect(pay_, &QPushButton::clicked, &window, &PosWindow::onMarkPaidClicked);
         connect(archive_, &QPushButton::clicked, &window, &PosWindow::onArchiveClicked);
+        setArchiveView(false);
         clearBill();
     }
 
@@ -1190,10 +1201,23 @@ public:
         return payment_ ? payment_->read() : Result<Payment>{false, "Select a held bill.", {}};
     }
 
+    bool showingArchives() const override { return showingArchives_; }
+
+    void setArchiveView(bool archived) override
+    {
+        showingArchives_ = archived;
+        markSelected(*historyTab_, !archived);
+        markSelected(*archivesTab_, archived);
+        historyTab_->setFont(interfaceFont(14, archived ? QFont::Medium : QFont::DemiBold));
+        archivesTab_->setFont(interfaceFont(14, archived ? QFont::DemiBold : QFont::Medium));
+        tabUnderline_->setGeometry(archived ? 99 : 0, 102, archived ? 63 : 54, 3);
+        listTitle_->setText(archived ? "Archived orders" : "Past orders");
+    }
+
     void showError(const string& message) override
     {
         error_->setText(text(message));
-        bill_->setFixedHeight(message.empty() ? 780 : 760);
+        bill_->setFixedHeight(message.empty() ? billViewportHeight : billViewportHeight - 20);
     }
 
     void showOrders(const vector<SaleRecord>& orders, const string& selectedId) override
@@ -1230,8 +1254,10 @@ public:
             }
         }
         if (orders.empty()) {
-            label(rows, {32, 24, 540, 21}, "No saved orders", 18, detailInk, QFont::DemiBold);
-            label(rows, {32, 58, 540, 36}, "Generate a bill in Current Order to see it here.", 14, detailMuted);
+            label(rows, {32, 24, 540, 21}, showingArchives_ ? "No archived orders" : "No saved orders",
+                  18, detailInk, QFont::DemiBold);
+            label(rows, {32, 58, 540, 36}, showingArchives_ ? "Archived orders appear here."
+                  : "Generate a bill in Current Order to see it here.", 14, detailMuted);
             y = 100;
         }
         finishRows(*orders_, *rows, y);
@@ -1309,21 +1335,26 @@ public:
             label(content, {28, y + 189, 772, 14}, "Payment details are a draft until marked as paid.",
                   12, detailMuted);
             y += 211;
-        } else {
+        } else if (order.payment.recorded) {
             label(content, {28, y + 19, 450, 21}, "Payment recorded", 18, detailInk, QFont::DemiBold);
             label(content, {28, y + 46, 772, 16}, "Saved payment details", 13, detailMuted);
             const QString mode = order.payment.mode == PaymentMode::Cash ? "Cash" :
                 order.payment.mode == PaymentMode::Card ? "Card" : "Wallet";
             field(content, 28, y + 83, 230, "Payment amount (PKR)",
-                  order.payment.recorded ? formattedMoney(order.payment.amount) : "—", true);
-            field(content, 276, y + 83, 230, "Payment mode", order.payment.recorded ? mode : "—", true);
+                  formattedMoney(order.payment.amount), true);
+            field(content, 276, y + 83, 230, "Payment mode", mode, true);
             field(content, 524, y + 83, 276, "Merchant",
                   order.payment.merchant.empty() ? "—" : text(order.payment.merchant), true);
             label(content, {28, y + 189, 772, 14}, "Payment is read only.", 12, detailMuted);
             y += 211;
+        } else {
+            label(content, {28, y + 19, 450, 21}, "No payment recorded", 18, detailInk, QFont::DemiBold);
+            label(content, {28, y + 46, 772, 16}, "This order was archived while on hold.", 13, detailMuted);
+            y += 82;
         }
         finishRows(*bill_, *content, y);
         pay_->setVisible(held);
+        archive_->setVisible(!showingArchives_);
         archive_->setEnabled(order.status != OrderStatus::Archived);
     }
 
@@ -1336,17 +1367,24 @@ public:
         label(content, {52, 104, 724, 17}, "Select an order to view its saved bill.", 14, detailMuted);
         finishRows(*bill_, *content, 180);
         pay_->hide();
+        archive_->setVisible(!showingArchives_);
         archive_->setEnabled(false);
     }
 
 private:
+    static constexpr int billViewportHeight = 735;
     PosWindow& window_;
+    QPushButton* historyTab_ = nullptr;
+    QPushButton* archivesTab_ = nullptr;
+    QWidget* tabUnderline_ = nullptr;
+    QLabel* listTitle_ = nullptr;
     QScrollArea* orders_ = nullptr;
     QScrollArea* bill_ = nullptr;
     QLabel* error_ = nullptr;
     QPushButton* archive_ = nullptr;
     QPushButton* pay_ = nullptr;
     std::unique_ptr<PaymentFields> payment_;
+    bool showingArchives_ = false;
 };
 
 class ProductFields final {
@@ -2095,6 +2133,8 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
     view.resetAddQuantity();
     view.showCartError(refreshCart());
     view.setBillSaving(false);
+    if (historyPage_)
+        static_cast<OrderHistoryView*>(historyPage_)->setArchiveView(false);
     displayOrder(result.value);
     showPage("Order History");
 }
@@ -2159,7 +2199,8 @@ void PosWindow::onMarkPaidClicked() {
 
 // archives the selected order and clears it from the bill panel state
 void PosWindow::onArchiveClicked() {
-    if (selectedOrderId_.empty()) {
+    if (!historyPage_ || selectedOrderId_.empty() ||
+        static_cast<OrderHistoryView*>(historyPage_)->showingArchives()) {
         return;
     }
 
@@ -2177,10 +2218,21 @@ void PosWindow::onArchiveClicked() {
     }
 }
 
+void PosWindow::showHistoryTab(bool archived) {
+    if (!historyPage_) return;
+    auto& view = *static_cast<OrderHistoryView*>(historyPage_);
+    if (view.showingArchives() == archived) return;
+    view.setArchiveView(archived);
+    clearOrderSelection();
+    refreshHistory();
+}
+
 void PosWindow::refreshHistory() {
     auto& view = *static_cast<OrderHistoryView*>(historyPage_);
-    const Result<vector<SaleRecord>> orders = history_.list();
+    const Result<vector<SaleRecord>> orders = view.showingArchives() ? history_.listArchived() : history_.list();
     if (!orders.success) {
+        view.showOrders({}, {});
+        clearOrderSelection();
         view.showError(orders.message);
         return;
     }

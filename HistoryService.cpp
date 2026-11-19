@@ -93,6 +93,16 @@ HistoryService::HistoryService(IPosStore& store, ProductService& products)
 
 Result<vector<SaleRecord>> HistoryService::list() const
 {
+    return listByArchiveStatus(false);
+}
+
+Result<vector<SaleRecord>> HistoryService::listArchived() const
+{
+    return listByArchiveStatus(true);
+}
+
+Result<vector<SaleRecord>> HistoryService::listByArchiveStatus(bool archived) const
+{
     auto data = store_.read();
     if (!data.success) {
         return {false, "Could not read order history. " + data.message, {}};
@@ -101,7 +111,9 @@ Result<vector<SaleRecord>> HistoryService::list() const
     auto& sales = data.value.sales;
     sales.erase(
         remove_if(sales.begin(), sales.end(),
-            [](const SaleRecord& sale) { return sale.status == OrderStatus::Archived; }),
+            [archived](const SaleRecord& sale) {
+                return (sale.status == OrderStatus::Archived) != archived;
+            }),
         sales.end());
 
     return {true, {}, move(sales)};
