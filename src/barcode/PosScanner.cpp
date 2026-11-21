@@ -35,6 +35,8 @@ Status PosScanner::start(int cameraIndex) {
 
     running_ = true;
     lastCode_.clear(); // Reset lastCode_ for a new session
+    noDecodePolls_ = 0;
+    rearmed_ = false;
     return {true, "Camera scanner started."};
 }
 
@@ -67,8 +69,10 @@ Result<ScanResult> PosScanner::poll() {
         }
 
         if (result.decoded.found) {
-            result.codeChanged = result.decoded.code != lastCode_;
+            result.codeChanged = result.decoded.code != lastCode_ || rearmed_;
             lastCode_ = result.decoded.code;
+            noDecodePolls_ = 0;
+            rearmed_ = false;
         } else {
             result.decoded.code.clear();
         }
@@ -78,6 +82,14 @@ Result<ScanResult> PosScanner::poll() {
         result.decoded.code.clear();
         result.decoded.message = input.message;
         result.codeChanged = false;
+    }
+
+    if (!result.decoded.found) {
+        const auto now = std::chrono::steady_clock::now();
+        if (noDecodePolls_ == 0) noDecodeSince_ = now;
+        if (noDecodePolls_ < 2) ++noDecodePolls_;
+        if (noDecodePolls_ >= 2 && now - noDecodeSince_ >= std::chrono::milliseconds(450))
+            rearmed_ = true;
     }
 
     return {true, result.decoded.found ? string{} : result.decoded.message, result};

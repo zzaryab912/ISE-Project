@@ -32,13 +32,15 @@ private:
     Product selectedProduct_{};             // start product with default values, the rest of the lines here do the same thing
     bool hasSelectedProduct_ = false;
     string selectedOrderId_{};
-    int64_t addQuantity_ = 0;
     SaleRecord displayedBill_{};
     bool hasDisplayedBill_ = false;
     QTimer cameraTimer_{};
     bool currentOrderOpened_ = false;
     Status cameraStatus_{};
     bool savingBill_ = false;
+    bool choosingHeldOrder_ = false;
+    string resumedOrderId_;
+    optional<Product> pendingProduct_;
     optional<Product> selectedCatalogueProduct_;
 
     QStackedWidget* pages_ = nullptr;       // this is the widget that holds the pages, shows one at a time
@@ -50,6 +52,7 @@ private:
     void stopCurrentOrderCamera();
     void closeEvent(QCloseEvent* event) override;
     void generateCurrentBill(OrderStatus status);
+    void addScannedProduct(const string& barcode);
     void displayOrder(const SaleRecord& order);
     void clearOrderSelection();
     string refreshCart();
@@ -63,17 +66,18 @@ public:
         virtual Result<Customer> readCustomer() const = 0;
         virtual Result<Payment> readPayment() const = 0;
         virtual void resetCheckoutFields() = 0;
-        virtual Result<int64_t> readAddQuantity() const = 0;
         virtual void showCameraPreview(const QImage& image) = 0;
         virtual void showScannerMessage(const string& message) = 0;
         virtual void showScannedProduct(const Product& product) = 0;
-        // resets the quantity to zero and disables Add until the next valid input
-        virtual void resetAddQuantity() = 0;
         virtual void showCart(const vector<CartItem>& items, const vector<optional<int64_t>>& amounts,
                               const optional<Totals>& totals) = 0;
         virtual void showCartError(const string& message) = 0;
         virtual void setBillSaving(bool saving) = 0;
         virtual void showBillError(const string& message) = 0;
+        virtual void selectQuantity(const string& id) = 0;
+        virtual void setCustomer(const Customer& customer) = 0;
+        virtual bool hasDraft() const = 0;
+        virtual bool hasQuantityDraft() const = 0;
     };
 
     class OrderHistoryView : public QWidget {
@@ -112,8 +116,9 @@ public:
                    OrderHistoryView& history, CatalogueView& catalogue, QTabWidget& catalogueTabs);
 
     void onCameraTick();                                                        // reads next frame, updates preview, looks for a new barcode
-    void onAddClicked();                                                        // Asks cart to add selected product in entered quantity
     void onCartQuantityChanged(const string& productId, int64_t quantity);      // updates existing row. zero removes the row here
+    void onHeldOrdersClicked();
+    void cancelPendingQuantity(const string& productId);
     void onGenerateBillClicked();                                               // below are all the actions
     void onGenerateAndHoldClicked();
     void onOrderSelected(const string& orderId);                                // loads and displays the saved bill for the order id

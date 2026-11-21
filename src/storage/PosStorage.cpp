@@ -390,6 +390,8 @@ namespace
             writeQuoted(out, sale.customer.name);
             writeQuoted(out, sale.ids.orderId);
 
+            const bool rates = any_of(sale.lines.begin(), sale.lines.end(), [](const SaleLine& line) { return line.taxPerUnit.has_value(); });
+            if (rates) out << "rates ";
             for (const SaleLine &item : sale.lines)
             {
                 writeQuoted(out, item.acronym);
@@ -397,6 +399,7 @@ namespace
                 out << moneyString(item.unitPrice) << ' '
                     << moneyString(item.discountPerUnit) << ' '
                     << quantityString(item.quantity) << ' ';
+                if (rates) out << (item.taxPerUnit ? moneyString(*item.taxPerUnit) : "-") << ' ';
             }
 
             out << moneyString(sale.totals.subtotal) << ' '
@@ -458,6 +461,7 @@ namespace
 
     struct BillItem
     {
+        optional<int64_t> taxPerUnit;
         string acronym;
         int64_t unitPrice = 0;
         int64_t discountPerUnit = 0;
@@ -623,10 +627,13 @@ namespace
     {
         int fieldCount = (int)fields.size();
 
-        if (fieldCount < 12 || (fieldCount - 8) % 4 != 0)
+        const bool rates = fieldCount > 3 && !fields[3].quoted && fields[3].value == "rates";
+        const int width = rates ? 5 : 4;
+        const int overhead = rates ? 9 : 8;
+        if (fieldCount < overhead + width || (fieldCount - overhead) % width != 0)
             throw runtime_error("Invalid number of fields.");
 
-        int itemCount = (fieldCount - 8) / 4;
+        int itemCount = (fieldCount - overhead) / width;
         BillLine bill;
 
         bill.ids.billId = removeQuotes(fields[0], "Bill ID");
@@ -636,7 +643,7 @@ namespace
         if (bill.ids.billId.empty() || bill.customerName.empty() || bill.ids.orderId.empty())
             throw runtime_error("Bill IDs and customer name cannot be empty.");
 
-        int index = 3;
+        int index = rates ? 4 : 3;
 
         for (int i = 0; i < itemCount; ++i)
         {
@@ -650,9 +657,11 @@ namespace
             item.unitPrice = parseMoney(fields[index + 1], "Unit price");
             item.discountPerUnit = parseMoney(fields[index + 2], "Discount per unit");
             item.quantity = parseQuantity(fields[index + 3]);
+            if (rates && removeUnquoted(fields[index + 4], "Tax per unit") != "-")
+                item.taxPerUnit = parseMoney(fields[index + 4], "Tax per unit");
 
             bill.items.push_back(move(item));
-            index += 4;
+            index += width;
         }
 
         bill.totals.subtotal = parseMoney(fields[index], "Subtotal");
@@ -764,7 +773,7 @@ namespace
             {
                 if (!isNumeric(line.productId) || !validBarcode(line.barcode) ||
                     trim(line.acronym).empty() || line.acronym.size() > 8 ||
-                    line.quantity <= 0 || line.unitPrice < 0 || line.discountPerUnit < 0 ||
+                    line.quantity <= 0 || line.unitPrice < 0 || line.discountPerUnit < 0 || (line.taxPerUnit && *line.taxPerUnit < 0) ||
                     line.discountPerUnit > line.unitPrice || !lineProducts.insert(line.productId).second)
                     throw runtime_error("Invalid purchase line for order " + ids.orderId + ".");
                 if (sale.status == OrderStatus::OnHold)
@@ -1080,6 +1089,7 @@ Status PosStorage::load()
                 saleLine.unitPrice = item.unitPrice;
                 saleLine.discountPerUnit = item.discountPerUnit;
                 saleLine.quantity = item.quantity;
+                saleLine.taxPerUnit = item.taxPerUnit;
 
                 sale.lines.push_back(move(saleLine));
             }

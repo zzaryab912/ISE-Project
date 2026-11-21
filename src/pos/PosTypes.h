@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -102,6 +103,7 @@ struct SaleLine {                   // saleline is one purchased product.
     int64_t unitPrice =0;
     int64_t discountPerUnit=0;
     int64_t quantity =0;
+    std::optional<std::int64_t> taxPerUnit {};
 };
 
 struct SaleRecord {
@@ -112,6 +114,12 @@ struct SaleRecord {
     OrderStatus status = OrderStatus::InProgress;
     vector<SaleLine> lines {};                      // helps accommodate lots of SaleLines (purchased products) 
     Totals totals {};
+};
+
+struct HeldCheckout {
+    SaleRecord sale;
+    std::vector<CartItem> items;
+    bool usesLegacyTax = false;
 };
 
 struct StoreData {

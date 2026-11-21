@@ -12,6 +12,7 @@ class CartService{
     ProductService& products_;
     const PricingCalculator& pricing_;
     std::vector<CartItem> items_;
+    std::optional<HeldCheckout> held_;
 
 public:
 
@@ -29,6 +30,7 @@ public:
 
   Result<Totals> lineTotals(const std::string& productId) const;
 
+  void restoreHeldItems(const HeldCheckout& held);
   void clear();
 
 };

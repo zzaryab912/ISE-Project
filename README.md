@@ -33,8 +33,8 @@ The Code 128 encoder, checksum, and decoder are **written by the team from scrat
 ### Point of Sale and Checkout (Current Order)
 
 - **Continuous camera scanning:** the live webcam preview stays active. Items held in view are automatically detected, straightened, decoded, and matched against `Product.txt` with no manual trigger.
-- **Duplicate suppression:** holding the same item in front of the camera across many frames keeps the product visible without re-adding it or resetting the entered quantity (`codeChanged == false`).
-- **Dynamic cart management:** add fractional quantities (kg) or integer counts, adjust rows with inline `+` / `-` controls, and remove a row by reducing its quantity to `0`. Adding a product that is already in the cart merges into the existing row.
+- **Scan to cart:** each accepted presentation adds one Count item or 1.000 kg to its cart row. Holding the barcode in view adds once. Remove it from view briefly before scanning the same barcode again.
+- **Inline quantities:** each scan selects the quantity for editing when the cashier is free to type. Enter replaces the row total. Use `+` and `-` to adjust the quantity or enter `0` to remove the row.
 - **Strict live stock checks:** the app verifies `(already in cart + requested) <= available stock` against live storage and shows clear inline feedback on a deficit.
 - **Captured pricing integrity:** each cart row snapshots the unit price, tax, and discount at the moment it is added. Later catalogue edits do not change the price of an item already in the cart.
 - **Unit mismatch protection:** if a product's measurement unit (`Count` vs `Weight`) is changed in the catalogue while it is in the cart, positive quantity changes and billing are blocked until the problem is resolved.
@@ -49,7 +49,8 @@ The Code 128 encoder, checksum, and decoder are **written by the team from scrat
 
 - **Two billing actions:**
   - **Generate Bill (Paid):** validates payment (`Cash`, `Card`, or `Wallet`), deducts live stock in `Product.txt`, assigns an 8-digit Order ID and a 9-digit Bill ID, and saves the records across `Order.txt`, `OrderDetail.txt`, and `Bill.txt` with status `Paid`.
-  - **Generate Bill and Put on Hold (Unpaid):** saves the complete bill with status `OnHold`. Stock is **not** deducted or reserved, and no payment is recorded.
+  - **Put on Hold (Unpaid):** saves the complete bill with status `OnHold` and clears Current Order for the next customer. Stock is **not** deducted or reserved, and no payment is recorded.
+  - **Resume:** open **Held Orders** from an empty Current Order and select the order. The saved quantities and customer details return to checkout. Paying or putting it back on hold updates the original order and bill.
 - **Delimiter contract:** each record ends with `#`. String fields (IDs, barcodes, names, dates, contacts, merchants) are wrapped in double quotes using `std::quoted`, so whitespace is preserved.
 
 ### Order History, Deferred Payment, and Archive
@@ -193,13 +194,12 @@ There are two roles. The **Cashier** operates the register (Current Order and Or
 
 [![Current Order page](documentation/Increment%202/Diagrams/Eyeris-1%28curr-ord%29.jpeg)](documentation/Increment%202/Diagrams/Eyeris-1%28curr-ord%29.jpeg)
 
-1. **Scan.** The camera starts automatically when you open the page. Hold a product's barcode in front of it. The right panel shows the product name, price excluding tax, and available stock. Removing the barcode from view leaves the product information on screen.
-2. **Description (optional).** Click **Description** to expand further product details inline, below the quantity input. No popup opens.
-3. **Add to Order.** Enter a quantity (units for `Count`, kg for `Weight`) and click **Add to Order**. If the product is already in the cart, the quantity is merged into its existing row. If the stock is insufficient, an inline warning appears and your input is kept so you can correct it.
-4. **Manage the cart.** Each row shows the acronym, unit price (excl. tax), unit discount, quantity, and line amount. Use `+` / `-` to adjust, and a row at `0` is removed. The summary box shows the live totals.
-5. **Bill.**
+1. **Scan.** The camera starts when you open the page. A scan adds one Count item or 1.000 kg to the cart. The right panel keeps the last scanned product's details visible.
+2. **Adjust the quantity.** Type a replacement total in the selected cart quantity field and press Enter. If the default exceeds stock, enter a quantity within the stock limit. The `+` and `-` controls also work, and `0` removes the row.
+3. **Bill.**
    - **Generate Bill (Paid):** enter the Customer Name (required), an optional Contact, the Payment Amount (must equal the payable total), the Payment Mode (`Cash`, `Card`, `Wallet`), and the Merchant, then click **Generate Bill**. The cart clears and **Order History** opens with the new order selected.
-   - **Generate Bill and Put on Hold:** enter the Customer Name and click **Generate Bill and Put on Hold**. The order is saved as `OnHold` with no stock deducted, the cart clears, and **Order History** opens on the held order.
+   - **Put on Hold:** enter the Customer Name and click **Put on Hold**. The order is saved as `OnHold` without deducting stock, and checkout stays on Current Order.
+4. **Resume.** Click **Held Orders**, then choose a saved order. Edit its quantities or keep scanning, then pay or put the order back on hold.
 
 ### Page 2: Order History (Past Orders)
 
@@ -296,15 +296,15 @@ flowchart TD
 flowchart LR
     CAM["Webcam frame"] -->|"ImageSource::nextFrame"| LOC["Locate and straighten barcode"]
     LOC --> DEC["BarcodeDecoder::decode"]
-    DEC --> CHG{"Same code as last frame?"}
-    CHG -->|"Yes: codeChanged = false"| KEEP["Keep current product and quantity"]
-    CHG -->|"No: codeChanged = true"| LOOK["ProductService::findByBarcode"]
+    DEC --> CHG{"New barcode presentation?"}
+    CHG -->|"No"| KEEP["Keep current product and quantity"]
+    CHG -->|"Yes"| LOOK["ProductService::findByBarcode"]
     LOOK -->|"Found"| SHOW["Show name, price, stock"]
     LOOK -->|"Not found"| NF["Product not found in catalogue"]
-    SHOW --> ADD["Add to Order: CartService::addByBarcode"]
+    SHOW --> ADD["Add 1 item or 1.000 kg to the cart"]
     ADD --> STK{"hasStock for existing + requested?"}
     STK -->|"Yes"| ROW["Merge or create cart row, recalculate totals"]
-    STK -->|"No"| WARN["Insufficient stock warning, cart unchanged"]
+    STK -->|"No"| WARN["Show stock limit and open inline quantity editor"]
 ```
 
 ### Generate Bill (Paid)
@@ -402,6 +402,14 @@ Example:
 ```
 
 ### `Bill.txt`
+
+Newly generated bills include captured tax rates for resuming an order.
+
+```text
+"billId" "customerName" "orderId" rates ["acronym" unitPrice discountPerUnit quantity taxPerUnit]... subtotal tax discount payable status #
+```
+
+The cashier-flow build also reads the earlier format:
 
 ```text
 "billId" "customerName" "orderId" ["acronym" unitPrice discountPerUnit quantity]... subtotal tax discount payable status #

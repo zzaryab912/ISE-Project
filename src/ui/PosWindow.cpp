@@ -7,9 +7,11 @@
 #include "PosScanner.h"
 #include "ProductService.h"
 
+#include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDialog>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -39,6 +41,7 @@
 #include <QSvgRenderer>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QVBoxLayout>
 #include <QWindow>
 
 #include <algorithm>
@@ -46,6 +49,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <map>
 
 namespace {
 
@@ -695,6 +699,7 @@ public:
     {
         amount = field(parent, x, y, width, "Payment amount (PKR)");
         amount->setPlaceholderText("Enter exact amount");
+        QObject::connect(amount, &QLineEdit::textEdited, amount, [this] { amountEdited_ = true; });
         const int modeX = x + width + gap;
         label(parent, {modeX, y, width, 16}, "Payment mode", 13, detailInk);
         mode = selector(parent, {modeX, y + 21, width, 39}, "Payment mode");
@@ -713,17 +718,20 @@ public:
                             merchant->text().trimmed().toStdString()}};
     }
 
-    void setAmount(int64_t money) { amount->setText(formattedMoney(money)); }
-    void clearAmount() { amount->clear(); }
+    void setAmount(int64_t money) { if (!amount->hasFocus()) amount->setText(formattedMoney(money)); }
+    void clearAmount() { if (!amount->hasFocus()) amount->clear(); }
+    bool hasDraft() const { return amountEdited_ || !merchant->text().isEmpty() || mode->currentIndex() != 0; }
 
     void reset()
     {
-        clearAmount();
+        amount->clear();
+        amountEdited_ = false;
         mode->setCurrentIndex(mode->findData(static_cast<int>(PaymentMode::Cash)));
         merchant->clear();
     }
 
 private:
+    bool amountEdited_ = false;
     QLineEdit* amount = nullptr;
     QComboBox* mode = nullptr;
     QLineEdit* merchant = nullptr;
@@ -738,9 +746,10 @@ public:
         setObjectName("quantityStepper");
         setAttribute(Qt::WA_StyledBackground);
         setStyleSheet("QWidget#quantityStepper {background:white; border:1px solid #dadada; border-radius:8px;}");
-        const int third = bounds.width() / 3;
-        const auto stepButton = [this, third, bounds](const QString& title, int x) {
-            auto* widget = action(this, {x, 1, third, bounds.height() - 2}, title, Action::Text);
+        const int buttonWidth = 36;
+        const int fieldWidth = bounds.width() - 2 * buttonWidth;
+        const auto stepButton = [this, buttonWidth, bounds](const QString& title, int x) {
+            auto* widget = action(this, {x, 1, buttonWidth, bounds.height() - 2}, title, Action::Text);
             widget->setFont(interfaceFont(17));
             widget->setStyleSheet(
                 "QPushButton { background:transparent; border:1px solid transparent; color:#171717; }"
@@ -749,11 +758,11 @@ public:
             return widget;
         };
         less_ = stepButton("−", 1);
-        more_ = stepButton("+", third * 2);
+        more_ = stepButton("+", buttonWidth + fieldWidth);
         less_->setAccessibleName("Decrease quantity");
         more_->setAccessibleName("Increase quantity");
         value_ = new QLineEdit(this);
-        value_->setGeometry(third, 1, third + 1, bounds.height() - 2);
+        value_->setGeometry(buttonWidth, 1, fieldWidth, bounds.height() - 2);
         value_->setFont(interfaceFont(13, QFont::Normal));
         value_->setAlignment(Qt::AlignCenter);
         countValidator_ = new QRegularExpressionValidator(quantityPattern(Unit::Count), value_);
@@ -767,15 +776,6 @@ public:
         connect(more_, &QPushButton::clicked, this, [this] { moveBy(1); });
         connect(value_, &QLineEdit::textEdited, this, [this] {
             if (typing) typing();
-        });
-        connect(value_, &QLineEdit::editingFinished, this, [this] {
-            const auto value = read();
-            if (value.success && value.value != quantity_) {
-                quantity_ = value.value;
-                if (changed) changed(quantity_);
-            } else if (!value.success && invalid) {
-                invalid(value.message);
-            }
         });
         setQuantity(0, Unit::Count);
     }
@@ -791,6 +791,13 @@ public:
     }
 
     Result<int64_t> read() const { return quantityInput(value_->text(), unit_); }
+    QString draft() const { return value_->text(); }
+    bool editing() const { return value_->hasFocus(); }
+    void restoreDraft(const QString& draft) { value_->setText(draft); }
+    int cursorPosition() const { return value_->cursorPosition(); }
+    void focusAt(int position) { value_->setFocus(); value_->setCursorPosition(position); }
+    void select() { value_->setFocus(); value_->selectAll(); }
+    std::function<void()> cancel;
 
     std::function<void(int64_t)> changed;
     std::function<void()> typing;
@@ -799,11 +806,22 @@ public:
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override
     {
-        if (watched == value_ && event->type() == QEvent::FocusOut && !value_->hasAcceptableInput()) {
-            const auto draft = read();
+        if (watched != value_ || event->type() != QEvent::KeyPress)
+            return QWidget::eventFilter(watched, event);
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Escape) {
             value_->setText(quantityText(quantity_, unit_));
-            if (typing) typing();
-            if (!draft.success && invalid) invalid(draft.message);
+            if (cancel) cancel();
+            return true;
+        }
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+            const auto value = read();
+            if (value.success) {
+                if (changed) changed(value.value);
+            } else if (invalid) {
+                invalid(value.message);
+            }
+            return true;
         }
         return QWidget::eventFilter(watched, event);
     }
@@ -847,7 +865,8 @@ public:
         auto* order = panel(this, {0, 88, 998, 870}, "#ffffff", "#e3e3e3");
         label(order, {28, 26, 300, 24}, "Order items", 20, ink, QFont::DemiBold);
         count_ = label(order, {28, 56, 600, 16}, {}, 13, muted);
-        label(order, {750, 35, 220, 16}, "All prices in PKR", 13, muted, QFont::Normal, right_);
+        auto* held = action(order, {750, 24, 220, 38}, "Held Orders", Action::Secondary);
+        connect(held, &QPushButton::clicked, &window, &PosWindow::onHeldOrdersClicked);
         const QStringList captions{"Bill ID", "Order ID", "Status"};
         const QStringList values{"—", "—", "In progress"};
         for (int i = 0; i < captions.size(); ++i) {
@@ -884,7 +903,7 @@ public:
         label(order, {28, 753, 220, 24}, "Total payable", 20, ink, QFont::DemiBold);
         totals_[3] = label(order, {650, 753, 320, 24}, {}, 20, ink, QFont::Bold, right_);
         pay_ = action(order, {28, 801, 455, 44}, "Generate Bill", Action::Checkout);
-        hold_ = action(order, {515, 801, 455, 44}, "Generate Bill and Put on Hold", Action::Hold);
+        hold_ = action(order, {515, 801, 455, 44}, "Put on Hold", Action::Hold);
 
         auto* camera = panel(this, {1022, 0, 480, 350}, "#ffffff", "#e3e3e3");
         label(camera, {24, 24, 350, 24}, "Camera", 20, ink, QFont::DemiBold);
@@ -903,45 +922,20 @@ public:
         productName_->setWordWrap(true);
         productPriceLabel_ = label(product, {24, 110, 215, 17}, "Price / item (excl. tax)", 14, muted);
         productPrice_ = label(product, {260, 110, 196, 17}, "—", 14, ink, QFont::Medium, right_);
-        quantityLabel_ = label(product, {24, 164, 235, 17}, "Quantity", 14, ink, QFont::Medium);
-        quantity_ = new QuantityStepper(product, {344, 154, 112, 36});
-        quantity_->setEnabled(false);
-        description_ = action(product, {24, 212, 432, 42}, "Description");
-        description_->setCheckable(true);
-        description_->setEnabled(false);
-        description_->setFont(interfaceFont(14, QFont::Medium));
-        description_->setStyleSheet(
-            "QPushButton { background:white; border:1px solid #dadada; border-radius:8px; text-align:left;"
-            " padding-left:13px; color:#171717; } QPushButton:hover {background:#f7f7f7;}"
-            " QPushButton:focus {border-color:#858585;} QPushButton:disabled {color:#888888;}");
-        disclosure_ = new SvgIcon(description_, {400, 13, 16, 16}, disclosureSvg);
-        specsViewport_ = viewport(product, {24, 266, 432, 200});
-        auto* specsContent = new QWidget;
-        specsContent->setAttribute(Qt::WA_NoSystemBackground);
-        specsContent->setFixedWidth(432);
-        specs_ = label(specsContent, {12, 7, 408, 136}, {}, 14, muted);
-        specsViewport_->setWidget(specsContent);
-        specsContent->setAutoFillBackground(false);
-        specsViewport_->hide();
+        label(product, {24, 156, 432, 22}, "Product details", 16, ink, QFont::DemiBold);
+        const QStringList detailLabels{"Product ID", "Acronym", "Barcode", "Measurement unit",
+                                       "Available stock", "Unit price", "Tax per unit", "Discount per unit"};
+        for (int i = 0; i < detailLabels.size(); ++i) {
+            const int y = 190 + i * 36;
+            label(product, {24, y, 175, 20}, detailLabels[i], 14, muted);
+            detailValues_[i] = label(product, {202, y, 254, 20}, "—", 14, ink, QFont::Medium, right_);
+        }
         cartError_ = label(product, {24, 479, 432, 39}, {}, 13, errorInk);
         cartError_->setWordWrap(true);
-        add_ = action(product, {24, 520, 432, 44}, "Add to Order", Action::Checkout);
-        add_->setEnabled(false);
-        showSelectionControls(false);
+        productPriceLabel_->hide();
+        productPrice_->hide();
         setBillSaving(false);
 
-        connect(description_, &QPushButton::toggled, this, [this](bool open) {
-            specsViewport_->setVisible(open);
-            disclosure_->setFlipped(open);
-        });
-        const auto updateAdd = [this] {
-            const auto amount = readAddQuantity();
-            add_->setEnabled(amount.success && selected_ && selected_->available > 0);
-        };
-        quantity_->changed = [updateAdd](int64_t) { updateAdd(); };
-        quantity_->typing = updateAdd;
-        quantity_->invalid = [this](const string& error) { showCartError(error); };
-        connect(add_, &QPushButton::clicked, &window, &PosWindow::onAddClicked);
         connect(pay_, &QPushButton::clicked, &window, &PosWindow::onGenerateBillClicked);
         connect(hold_, &QPushButton::clicked, &window, &PosWindow::onGenerateAndHoldClicked);
     }
@@ -961,15 +955,8 @@ public:
     {
         name_->clear();
         contact_->clear();
+        drafts_.clear();
         payment_->reset();
-    }
-
-    Result<int64_t> readAddQuantity() const override
-    {
-        const auto amount = quantity_->read();
-        if (!amount.success) return amount;
-        if (amount.value == 0) return {false, "Enter a positive quantity.", 0};
-        return amount;
     }
 
     void showCameraPreview(const QImage& image) override
@@ -995,41 +982,45 @@ public:
 
     void showScannedProduct(const Product& product) override
     {
-        selected_ = product;
         productName_->setText(text(product.name));
         productName_->setToolTip(text(product.name));
         productPriceLabel_->setText("Price / " + unitShort(product.unit) + " (excl. tax)");
-        quantityLabel_->setText(product.unit == Unit::Count ? "Quantity (items)" : "Quantity (kg)");
         productPrice_->setText("PKR " + formattedMoney(product.unitPrice));
-        const auto info = QStringList{
-            "Product ID    " + text(product.id), "Acronym    " + text(product.acronym),
-            "Barcode    " + text(product.barcode), "Measurement unit    " + unitName(product.unit),
-            "Available stock    " + availability(product),
-            "Unit price (excl. tax)    PKR " + formattedMoney(product.unitPrice) + " / " + unitShort(product.unit),
-            "Tax per " + unitShort(product.unit) + "    PKR " + formattedMoney(product.taxPerUnit),
-            "Discount per " + unitShort(product.unit) + "    PKR " + formattedMoney(product.discountPerUnit)
-        }.join('\n');
-        const auto height = wrapHeight(*specs_, info, 136);
-        specs_->setFixedHeight(height);
-        specsViewport_->widget()->setFixedHeight(std::max(200, height + 16));
-        quantity_->setEnabled(true);
-        description_->setEnabled(true);
-        showSelectionControls(true);
-    }
-
-    void resetAddQuantity() override
-    {
-        quantity_->setQuantity(0, selected_ ? selected_->unit : Unit::Count);
-        add_->setEnabled(false);
+        const QStringList details{text(product.id), text(product.acronym), text(product.barcode),
+                                  unitName(product.unit), availability(product),
+                                  "PKR " + formattedMoney(product.unitPrice) + " / " + unitShort(product.unit),
+                                  "PKR " + formattedMoney(product.taxPerUnit),
+                                  "PKR " + formattedMoney(product.discountPerUnit)};
+        for (int i = 0; i < details.size(); ++i) {
+            detailValues_[i]->setText(details[i]);
+            detailValues_[i]->setToolTip(details[i]);
+        }
+        productPriceLabel_->show();
+        productPrice_->show();
     }
 
     void showCart(const vector<CartItem>& items, const vector<optional<int64_t>>& amounts,
                   const optional<Totals>& totals) override
     {
+        for (auto it = drafts_.begin(); it != drafts_.end();) {
+            const bool present = std::any_of(items.begin(), items.end(), [&it](const CartItem& item) { return item.product.id == it->first; });
+            if (!present) it = drafts_.erase(it); else ++it;
+        }
+        string focused;
+        int cursor = 0;
+        for (const auto& [id, stepper] : steppers_) {
+            if (stepper->editing()) {
+                focused = id;
+                cursor = stepper->cursorPosition();
+                break;
+            }
+        }
+        steppers_.clear();
         auto* content = newRows(*rows_, 942);
         int y = 0;
         long double units = 0;
         long double kilograms = 0;
+        int committedRows = 0;
         for (size_t i = 0; i < items.size(); ++i) {
             const auto& item = items[i];
             auto* row = new QWidget(content);
@@ -1042,18 +1033,28 @@ public:
                   unitName(product.unit), 13, muted);
             label(row, {362, 30, 90, 17}, formattedMoney(product.unitPrice), 14, ink, QFont::Normal, right_);
             label(row, {500, 30, 90, 17}, formattedMoney(product.discountPerUnit), 14, ink, QFont::Normal, right_);
-            auto* stepper = new QuantityStepper(row, {646, 25, 112, 36});
+            auto* stepper = new QuantityStepper(row, {626, 25, 152, 36});
             stepper->setQuantity(item.quantity, product.unit);
+            steppers_[product.id] = stepper;
+            if (drafts_.count(product.id)) stepper->restoreDraft(drafts_[product.id]);
+            stepper->typing = [this, id = product.id, stepper] { drafts_[id] = stepper->draft(); };
+            stepper->cancel = [this, id = product.id] {
+                drafts_.erase(id);
+                window_.cancelPendingQuantity(id);
+            };
             stepper->changed = [this, id = product.id](int64_t value) {
+                drafts_.erase(id);
                 window_.onCartQuantityChanged(id, value);
             };
             stepper->invalid = [this](const string& message) { showCartError(message); };
-            const QString amount = i < amounts.size() && amounts[i] ? formattedMoney(*amounts[i]) : "—";
+            const QString amount = item.quantity == 0 ? "Enter quantity"
+                : i < amounts.size() && amounts[i] ? formattedMoney(*amounts[i]) : "—";
             label(row, {782, 30, 160, 17}, amount, 14, ink, QFont::Medium, right_);
             const int height = std::max(86, 69 + identityHeight);
             row->setGeometry(0, y, 942, height);
             rule(row, 0, height - 1, 942, "#e3e3e3");
             y += height;
+            if (item.quantity > 0) ++committedRows;
             if (product.unit == Unit::Count) units += item.quantity / 1000;
             else kilograms += static_cast<long double>(item.quantity) / 1000;
         }
@@ -1062,8 +1063,12 @@ public:
             y = 90;
         }
         finishRows(*rows_, *content, y);
-        count_->setText(QString("%1 %2 · %3 %4%5").arg(items.size())
-            .arg(items.size() == 1 ? "product" : "products").arg(QString::number(static_cast<double>(units), 'f', 0))
+        if (const auto editor = steppers_.find(focused); editor != steppers_.end()) {
+            if (drafts_.count(focused)) editor->second->focusAt(cursor);
+            else editor->second->select();
+        }
+        count_->setText(QString("%1 %2 · %3 %4%5").arg(committedRows)
+            .arg(committedRows == 1 ? "product" : "products").arg(QString::number(static_cast<double>(units), 'f', 0))
             .arg(units == 1 ? "item" : "items")
             .arg(" · " + QString::number(static_cast<double>(kilograms), 'f', 3) + " kg"));
         const Totals displayed = totals.value_or(Totals{});
@@ -1071,12 +1076,27 @@ public:
         totals_[1]->setText(totals ? formattedMoney(displayed.tax) : "—");
         totals_[2]->setText(totals ? formattedMoney(displayed.discount) : "—");
         totals_[3]->setText(totals ? "PKR " + formattedMoney(displayed.payable) : "—");
-        if (items.empty()) payment_->clearAmount();
+        if (committedRows == 0) payment_->clearAmount();
         else if (totals) payment_->setAmount(displayed.payable);
-        canBill_ = !items.empty() && totals.has_value();
+        canBill_ = committedRows > 0 && totals.has_value();
         setBillSaving(false);
     }
 
+    void selectQuantity(const string& id) override
+    {
+        const auto next = steppers_.find(id);
+        if (next == steppers_.end()) return;
+        const auto* focused = QApplication::focusWidget();
+        if (qobject_cast<const QLineEdit*>(focused) && !rows_->isAncestorOf(focused)) return;
+        for (const auto& [rowId, stepper] : steppers_) {
+            if (stepper->editing() && drafts_.count(rowId)) return;
+        }
+        rows_->ensureWidgetVisible(next->second);
+        next->second->select();
+    }
+    void setCustomer(const Customer& c) override { name_->setText(text(c.name)); contact_->setText(text(c.contact)); }
+    bool hasDraft() const override { return !name_->text().isEmpty() || !contact_->text().isEmpty() || payment_->hasDraft() || !drafts_.empty(); }
+    bool hasQuantityDraft() const override { return !drafts_.empty(); }
     void showCartError(const string& message) override { cartError_->setText(text(message)); }
     void showBillError(const string& message) override
     {
@@ -1101,18 +1121,11 @@ private:
         rows_->setFixedHeight(billError_->text().isEmpty() ? 288 : 264);
     }
 
-    void showSelectionControls(bool visible)
-    {
-        for (auto* control : std::array<QWidget*, 6>{
-                productPriceLabel_, productPrice_, quantityLabel_, quantity_, description_, add_}) {
-            control->setVisible(visible);
-        }
-    }
-
     static constexpr auto right_ = Qt::AlignRight | Qt::AlignVCenter;
     PosWindow& window_;
+    std::map<string, QuantityStepper*> steppers_;
+    std::map<string, QString> drafts_;
     QScrollArea* rows_ = nullptr;
-    QScrollArea* specsViewport_ = nullptr;
     QLabel* count_ = nullptr;
     CameraFeed* preview_ = nullptr;
     QLabel* previewStatus_ = nullptr;
@@ -1120,22 +1133,16 @@ private:
     QLabel* productName_ = nullptr;
     QLabel* productPriceLabel_ = nullptr;
     QLabel* productPrice_ = nullptr;
-    QLabel* quantityLabel_ = nullptr;
-    QLabel* specs_ = nullptr;
+    std::array<QLabel*, 8> detailValues_{};
     QLabel* cartError_ = nullptr;
     QLabel* billError_ = nullptr;
     std::array<QLabel*, 4> totals_{};
     SvgIcon* cameraIcon_ = nullptr;
-    SvgIcon* disclosure_ = nullptr;
     QLineEdit* name_ = nullptr;
     QLineEdit* contact_ = nullptr;
-    QuantityStepper* quantity_ = nullptr;
-    QPushButton* description_ = nullptr;
-    QPushButton* add_ = nullptr;
     QPushButton* pay_ = nullptr;
     QPushButton* hold_ = nullptr;
     std::unique_ptr<PaymentFields> payment_;
-    optional<Product> selected_;
     bool hasPreview_ = false;
     bool canBill_ = false;
 };
@@ -2003,57 +2010,50 @@ void PosWindow::onCameraTick() {                                        // calle
         return;
     }
 
-    const Result<Product> product = products_.findByBarcode(scane.value.decoded.code);      // looks up barcode in the catalogue. If there is no match, selection stays as it is
+    if (!choosingHeldOrder_) addScannedProduct(scane.value.decoded.code);
+}
+
+void PosWindow::addScannedProduct(const string& barcode) {
+    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+    const Result<Product> product = products_.findByBarcode(barcode);
     if (!product.success) {
         view.showScannerMessage(product.message);
         return;
     }
 
     view.showScannerMessage({});
-    if (hasSelectedProduct_ && selectedProduct_.id == product.value.id) {                   // preserves teh entered quantity if lookup returns product already selected
-        return;
-    }
-
-    // for a different recognised product: this is the new selection now, and the addQuantity option is now set to zero again
     selectedProduct_ = product.value;
     hasSelectedProduct_ = true;
-    addQuantity_ = 0;
     view.showScannedProduct(selectedProduct_);
-    view.resetAddQuantity();
-}
-
-// when clicking on Add to order
-void PosWindow::onAddClicked() {
-    if (!currentOrderPage_ || !hasSelectedProduct_) {                                      // wait until a product is selected
-        return;
-    }
-
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-    const Result<int64_t> quantity = view.readAddQuantity();
-    if (!quantity.success) {
-        view.showCartError(quantity.message);
-        return;
-    }
-    addQuantity_ = quantity.value;
-
-    const Status result = cart_.addByBarcode(selectedProduct_.barcode, addQuantity_);       // if add fails, it stops trying to add so cashier can change quantity manually. super neat right?
+    const Status result = cart_.addByBarcode(selectedProduct_.barcode, 1000);
+    const bool samePending = pendingProduct_ && pendingProduct_->id == selectedProduct_.id;
+    if (result.success && samePending) pendingProduct_.reset();
     if (!result.success) {
-        view.showCartError(result.message);
-        return;
+        const auto items = cart_.items();
+        const bool exists = std::any_of(items.begin(), items.end(), [this](const CartItem& item) { return item.product.id == selectedProduct_.id; });
+        if (!exists && selectedProduct_.available > 0 && (!pendingProduct_ || samePending))
+            pendingProduct_ = selectedProduct_;
     }
-
-    addQuantity_ = 0;
-    view.resetAddQuantity();
-    view.showCartError(refreshCart());
+    const string error = refreshCart();
+    view.showCartError(result.success ? error : result.message);
+    view.selectQuantity(selectedProduct_.id);
+    if (result.success) QApplication::beep();
 }
 
 // updates an existing row. zero removes the row here
 void PosWindow::onCartQuantityChanged(const string& productId, int64_t quantity) {
-    const Status result = cart_.setQuantity(productId, quantity);
+    const bool pending = pendingProduct_ && pendingProduct_->id == productId;
+    Status result;
+    if (pending) {
+        if (quantity <= 0) { cancelPendingQuantity(productId); return; }
+        result = cart_.addByBarcode(pendingProduct_->barcode, quantity);
+        if (result.success) { pendingProduct_.reset(); QApplication::beep(); }
+    } else result = cart_.setQuantity(productId, quantity);
     if (currentOrderPage_) {
         auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
         const string refreshError = refreshCart();
         view.showCartError(result.success ? refreshError : result.message);
+        if (!result.success) view.selectQuantity(productId);
     }
 }
 
@@ -2077,8 +2077,71 @@ string PosWindow::refreshCart() {
     }
 
     const Result<Totals> totals = cart_.totals();
-    view.showCart(items, amounts, totals.success ? optional<Totals>{totals.value} : nullopt);
+    auto displayed = items;
+    if (pendingProduct_) {
+        displayed.push_back({*pendingProduct_, 0});
+        amounts.push_back(nullopt);
+        if (error.empty()) {
+            error = ("Enter a quantity for " + text(pendingProduct_->name) +
+                     " within the available stock (" +
+                     quantityText(pendingProduct_->available, pendingProduct_->unit) + " " +
+                     unitShort(pendingProduct_->unit) + ").").toStdString();
+        }
+    }
+    view.showCart(displayed, amounts, totals.success ? optional<Totals>{totals.value} : nullopt);
     return totals.success || !error.empty() ? error : totals.message;
+}
+
+void PosWindow::cancelPendingQuantity(const string& productId) {
+    if (!pendingProduct_ || pendingProduct_->id != productId) return;
+    pendingProduct_.reset();
+    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+    view.showCartError(refreshCart());
+}
+
+void PosWindow::onHeldOrdersClicked() {
+    if (!currentOrderPage_ || choosingHeldOrder_) return;
+    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+    if (!cart_.items().empty() || pendingProduct_ || view.hasDraft() || !resumedOrderId_.empty()) {
+        view.showBillError("Finish or hold the current order before opening a held order."); return;
+    }
+    const auto orders = history_.list();
+    if (!orders.success) { view.showBillError(orders.message); return; }
+    QDialog picker(this);
+    picker.setWindowTitle("Held Orders");
+    picker.resize(480, 320);
+    auto* layout = new QVBoxLayout(&picker);
+    layout->addWidget(new QLabel("Select an order to resume.", &picker));
+    auto* list = new QListWidget(&picker);
+    list->setAccessibleName("Held orders");
+    layout->addWidget(list);
+    for (const auto& order : orders.value) {
+        if (order.status != OrderStatus::OnHold) continue;
+        auto* row = new QListWidgetItem(
+            text(order.customer.name) + "   ·   #" + text(order.ids.orderId) +
+            "   ·   PKR " + formattedMoney(order.totals.payable), list);
+        row->setData(Qt::UserRole, text(order.ids.orderId));
+    }
+    if (list->count() == 0) {
+        view.showBillError("No held orders.");
+        return;
+    }
+    QString orderId;
+    const auto choose = [&](QListWidgetItem* row) {
+        orderId = row->data(Qt::UserRole).toString();
+        picker.accept();
+    };
+    connect(list, &QListWidget::itemClicked, &picker, choose);
+    connect(list, &QListWidget::itemActivated, &picker, choose);
+    const QScopedValueRollback<bool> choosing(choosingHeldOrder_, true);
+    if (picker.exec() != QDialog::Accepted || orderId.isEmpty()) return;
+    const auto held = checkout_.resumeHeldOrder(orderId.toStdString());
+    if (!held.success) { view.showBillError(held.message); return; }
+    cart_.restoreHeldItems(held.value);
+    resumedOrderId_ = held.value.sale.ids.orderId;
+    view.setCustomer(held.value.sale.customer);
+    view.showBillError(held.value.usesLegacyTax ? "Legacy order: edited totals use current tax rates where saved rates are missing." : "");
+    view.showCartError(refreshCart());
 }
 
 // generates and saves a paid bill using the entered payment details
@@ -2097,6 +2160,10 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
     }
 
     auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+    if (pendingProduct_ || view.hasQuantityDraft()) {
+        view.showBillError("Press Enter to apply the quantity, or Escape to cancel it.");
+        return;
+    }
     const QScopedValueRollback<bool> saving(savingBill_, true);
     const Result<Customer> customer = view.readCustomer();
     if (!customer.success) {
@@ -2120,7 +2187,7 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
                               now.time().toString("HH:mm:ss").toStdString()};
     view.showBillError({});
     view.setBillSaving(true);
-    const Result<SaleRecord> result = checkout_.generateBill(cart_.items(), customer.value, payment, status, timestamp);
+    const Result<SaleRecord> result = resumedOrderId_.empty() ? checkout_.generateBill(cart_.items(), customer.value, payment, status, timestamp) : checkout_.saveHeldOrder(resumedOrderId_, cart_.items(), customer.value, payment, status);
     if (!result.success) {
         view.showBillError(result.message);
         view.setBillSaving(false);
@@ -2128,11 +2195,16 @@ void PosWindow::generateCurrentBill(OrderStatus status) {
     }
 
     cart_.clear();
-    addQuantity_ = 0;
+    resumedOrderId_.clear();
+    pendingProduct_.reset();
+    view.showBillError({});
     view.resetCheckoutFields();
-    view.resetAddQuantity();
     view.showCartError(refreshCart());
     view.setBillSaving(false);
+    if (status == OrderStatus::OnHold) {
+        view.showBillError("Order saved on hold.");
+        return;
+    }
     if (historyPage_)
         static_cast<OrderHistoryView*>(historyPage_)->setArchiveView(false);
     displayOrder(result.value);

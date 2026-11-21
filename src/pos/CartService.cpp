@@ -178,7 +178,8 @@ Status CartService::setQuantity(const string& productId, int64_t quantity) {
     }
 
     // Check live stock for absolute requested quantity
-    if (!products_.hasStock(liveProduct, quantity)) {
+    const bool reducingHeldQuantity = held_ && quantity < existing->quantity;
+    if (!reducingHeldQuantity && !products_.hasStock(liveProduct, quantity)) {
         return {false, makeInsufficientStockMessage(liveProduct.unit, 0, quantity, liveProduct.available)};
     }
 
@@ -193,6 +194,17 @@ std::vector<CartItem> CartService::items() const {
 
 Result<Totals> CartService::totals() const {
 
+    if (held_ && held_->usesLegacyTax && held_->items.size() == items_.size()) {
+        bool same = true;
+        for (size_t i = 0; i < items_.size(); ++i) {
+            const auto& a = items_[i]; const auto& b = held_->items[i];
+            if (a.quantity != b.quantity || a.product.id != b.product.id || a.product.barcode != b.product.barcode ||
+                a.product.unit != b.product.unit || a.product.acronym != b.product.acronym ||
+                a.product.unitPrice != b.product.unitPrice || a.product.taxPerUnit != b.product.taxPerUnit ||
+                a.product.discountPerUnit != b.product.discountPerUnit) same = false;
+        }
+        if (same) return {true, {}, held_->sale.totals};
+    }
     return pricing_.calculate(items_);
 }
 
@@ -217,7 +229,13 @@ Result<Totals> CartService::lineTotals(const string& productId) const {
     return pricing_.calculate(singleRow);
 }
 
+void CartService::restoreHeldItems(const HeldCheckout& held) {
+    items_ = held.items;
+    held_ = held;
+}
+
 void CartService::clear() {
+    held_.reset();
 
     items_.clear();
 }

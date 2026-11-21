@@ -125,7 +125,7 @@ Result<vector<SaleLine>> buildSaleLines(const vector<CartItem>& items,
         }
 
         lines.push_back({captured.id, captured.barcode, captured.acronym,
-                         captured.unitPrice, captured.discountPerUnit, item.quantity});
+                         captured.unitPrice, captured.discountPerUnit, item.quantity, captured.taxPerUnit});
     }
 
     return {true, {}, move(lines)};
@@ -144,6 +144,13 @@ Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items,
                                                 const Payment& payment,
                                                 OrderStatus status,
                                                 const Timestamp& timestamp)
+{
+    return save(items, customer, payment, status, timestamp, nullptr);
+}
+
+Result<SaleRecord> CheckoutService::save(const vector<CartItem>& items, const Customer& customer,
+                                        const Payment& payment, OrderStatus status,
+                                        const Timestamp& timestamp, const string* orderId)
 {
     if (status != OrderStatus::Paid && status != OrderStatus::OnHold) {
         return {false, "A new bill must be paid or put on hold.", {}};
@@ -175,6 +182,13 @@ Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items,
         return {false, "Could not read checkout data. " + data.message, {}};
     }
 
+    auto original = data.value.sales.end();
+    if (orderId) {
+        original = find_if(data.value.sales.begin(), data.value.sales.end(),
+                           [&](const SaleRecord& sale) { return sale.ids.orderId == *orderId; });
+        if (original == data.value.sales.end() || original->status != OrderStatus::OnHold || original->payment.recorded)
+            return {false, "Order is no longer an unpaid held order.", {}};
+    }
     auto lines = buildSaleLines(items, data.value.products, products_);
     if (!lines.success) {
         return {false, lines.message, {}};
@@ -186,23 +200,42 @@ Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items,
         return {false, "Could not calculate the bill. " + totals.message, {}};
     }
 
-    const Status paymentStatus = validatePayment(payment, status, totals.value.payable);
+    bool unchangedLegacy = original != data.value.sales.end() && original->lines.size() == items.size();
+    bool legacy = false;
+    if (unchangedLegacy) {
+        for (size_t i = 0; i < items.size(); ++i) {
+            const auto& line = original->lines[i];
+            const auto& item = items[i];
+            auto live = find_if(data.value.products.begin(), data.value.products.end(), [&](const Product& p) { return p.id == line.productId; });
+            legacy |= !line.taxPerUnit.has_value();
+            if (live == data.value.products.end() || item.product.id != line.productId || item.product.barcode != line.barcode ||
+                item.product.acronym != line.acronym || item.product.unitPrice != line.unitPrice ||
+                item.product.discountPerUnit != line.discountPerUnit || item.quantity != line.quantity ||
+                (line.taxPerUnit && item.product.taxPerUnit != *line.taxPerUnit)) unchangedLegacy = false;
+        }
+    }
+    unchangedLegacy = unchangedLegacy && legacy;
+    Totals finalTotals = unchangedLegacy ? original->totals : totals.value;
+    const Status paymentStatus = validatePayment(payment, status, finalTotals.payable);
     if (!paymentStatus.success) {
         return {false, paymentStatus.message, {}};
     }
 
-    auto ids = ids_.saleIds(data.value, timestamp);
-    if (!ids.success) {
-        return {false, "Could not generate sale IDs. " + ids.message, {}};
-    }
-
     SaleRecord sale;
-    sale.ids = move(ids.value);
-    sale.timestamp = timestamp;
+    if (original != data.value.sales.end()) {
+        sale.ids = original->ids;
+        sale.timestamp = original->timestamp;
+    } else {
+        auto ids = ids_.saleIds(data.value, timestamp);
+        if (!ids.success) return {false, "Could not generate sale IDs. " + ids.message, {}};
+        sale.ids = move(ids.value);
+        sale.timestamp = timestamp;
+    }
     sale.customer = customer;
     sale.status = status;
     sale.lines = move(lines.value);
-    sale.totals = totals.value;
+    sale.totals = finalTotals;
+    if (unchangedLegacy) sale.lines = original->lines;
 
     if (status == OrderStatus::Paid) {
         sale.payment = payment;
@@ -213,11 +246,43 @@ Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items,
     }
 
     // Submit the sale and any stock change together through one save.
-    data.value.sales.push_back(sale);
+    if (original != data.value.sales.end()) *original = sale;
+    else data.value.sales.push_back(sale);
     const Status saved = store_.save(data.value);
     if (!saved.success) {
         return {false, "Could not save the bill. " + saved.message, {}};
     }
 
     return {true, {}, move(sale)};
+}
+
+Result<HeldCheckout> CheckoutService::resumeHeldOrder(const string& orderId) const
+{
+    auto data = store_.read();
+    if (!data.success) return {false, data.message, {}};
+    auto sale = find_if(data.value.sales.begin(), data.value.sales.end(), [&](const SaleRecord& s) { return s.ids.orderId == orderId; });
+    if (sale == data.value.sales.end() || sale->status != OrderStatus::OnHold || sale->payment.recorded)
+        return {false, "Order is not an unpaid held order.", {}};
+    HeldCheckout held;
+    held.sale = *sale;
+    for (const auto& line : sale->lines) {
+        auto product = find_if(data.value.products.begin(), data.value.products.end(), [&](const Product& p) { return p.id == line.productId && p.barcode == line.barcode; });
+        if (product == data.value.products.end()) return {false, "Held product no longer exists.", {}};
+        CartItem item{*product, line.quantity};
+        item.product.acronym = line.acronym;
+        item.product.unitPrice = line.unitPrice;
+        item.product.discountPerUnit = line.discountPerUnit;
+        if (line.taxPerUnit) item.product.taxPerUnit = *line.taxPerUnit;
+        else held.usesLegacyTax = true;
+        held.items.push_back(move(item));
+    }
+    return {true, {}, move(held)};
+}
+
+Result<SaleRecord> CheckoutService::saveHeldOrder(const string& orderId, const vector<CartItem>& items,
+                                                   const Customer& customer, const Payment& payment, OrderStatus status)
+{
+    auto held = resumeHeldOrder(orderId);
+    if (!held.success) return {false, held.message, {}};
+    return save(items, customer, payment, status, held.value.sale.timestamp, &orderId);
 }

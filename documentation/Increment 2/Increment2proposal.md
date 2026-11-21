@@ -4,6 +4,14 @@
 
 References: [agreed features](Proposed%20System%20Design.md), [assignment requirements](Increment%202%20Requirements.md), [interface design](Interface%20Design.md), and [Figma](https://www.figma.com/design/eKMDVbIiBG4LTtJkC5r72U/Untitled?node-id=1-2).
 
+### Cashier flow revision
+
+On the cashier-flow branch, this section supersedes the earlier manual Add flow and the original held-order navigation. One accepted scan adds 1 item or 1.000 kg. Scans of an existing product add the default to its row. Selecting the row's quantity lets the cashier type a replacement total and commit with Enter. Keep the cart steppers, keep the right panel informational, and use an inline quantity editor if the default addition exceeds stock. The initial weight is a valid quantity and can be put on hold immediately. A continuously visible barcode produces one accepted event. The scanner adapter re-arms after a sustained period of unreadable frames so a deliberate same-code rescan can be accepted.
+
+Put on Hold saves the order and returns the cashier to an empty Current Order. Held Orders lists unpaid held orders and opens a selected order as an editable cart. Opening a held order preserves any existing draft by requiring the cashier to finish or hold it first. Saving an edited reopened order preserves its order ID, bill ID, and original timestamp. Hold saves without deducting stock. Paying saves the edited order and deducts stock in one store operation. Any failure keeps the active draft and the saved order intact.
+
+`CheckoutService::resumeHeldOrder(const std::string&)` returns the saved `SaleRecord` and restorable cart items as `HeldCheckout`. `CartService::restoreHeldItems(const HeldCheckout&)` replaces the active cart. `CheckoutService::saveHeldOrder(orderId, items, customer, payment, status)` saves a reopened cart against the existing held order. Determine resumable items from saved rates and live product identity. A newly saved sale line carries the captured tax per unit. `Bill.txt` readers accept the original line format and the extended format with an unquoted `rates` marker before the line groups and a tax-per-unit field after each quantity. Original-format lines lack captured tax rates. A resumed legacy bill keeps its totals while its item snapshot is unchanged. Edited totals use current catalogue tax only for legacy lines missing this rate, with a notice to the cashier.
+
 ## 1. Work division
 
 | Person | Responsibility |
