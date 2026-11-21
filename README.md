@@ -78,21 +78,21 @@ The Code 128 encoder, checksum, and decoder are **written by the team from scrat
 
 | Requirement | Where it is implemented | Primary actor |
 |---|---|---|
-| Generate a 6-digit Code 128 Set B barcode (first digit non-zero, `100000`–`999999`) | `barcodeGenerator.cpp`, `BarcodePlotter.cpp` | Manager, Cashier |
-| Display the barcode on screen and save it as a PNG image | `BarcodePlotter.cpp`, `BarcodeImageIO.cpp` | Manager, Cashier |
-| Read a 6-digit barcode and display the number | `BarcodeDecoder.cpp` | Cashier, Manager |
-| Read from an uploaded image or the webcam | `camera-harness.cpp` (`ImageSource`) | Cashier, Manager |
-| Team-written encoder / decoder, no non-standard barcode libraries | `barcodeGenerator.cpp`, `BarcodeDecoder.cpp` | Architecture |
-| Continuous camera-based barcode reader in the POS | `PosScanner.cpp`, `camera-harness.cpp` | Cashier |
+| Generate a 6-digit Code 128 Set B barcode (first digit non-zero, `100000`–`999999`) | `src/barcode/barcodeGenerator.cpp`, `src/barcode/BarcodePlotter.cpp` | Manager, Cashier |
+| Display the barcode on screen and save it as a PNG image | `src/barcode/BarcodePlotter.cpp`, `src/barcode/BarcodeImageIO.cpp` | Manager, Cashier |
+| Read a 6-digit barcode and display the number | `src/barcode/BarcodeDecoder.cpp` | Cashier, Manager |
+| Read from an uploaded image or the webcam | `src/barcode/camera-harness.cpp` (`ImageSource`) | Cashier, Manager |
+| Team-written encoder / decoder, no non-standard barcode libraries | `src/barcode/barcodeGenerator.cpp`, `src/barcode/BarcodeDecoder.cpp` | Architecture |
+| Continuous camera-based barcode reader in the POS | `src/barcode/PosScanner.cpp`, `src/barcode/camera-harness.cpp` | Cashier |
 | The entire POS application is GUI-based (Qt 6) | `PosWindow` (Qt 6 Widgets / Svg) | Cashier, Manager |
-| Display product specifications from `Product.txt` on barcode scan | `PosScanner.cpp`, `ProductService.cpp` | Cashier |
-| Manage `Product.txt` with space-separated fields, quoted strings, and a `#` end-of-line marker | `PosStorage.cpp`, `ProductService.cpp` | Manager, Storage |
-| Record the order and generate a bill with live inventory validation | `CartService.cpp`, `CheckoutService.cpp` | Cashier |
-| View the product description on scan or via the inline Description button | `CurrentOrderPage`, `ProductService.cpp` | Cashier |
-| Save orders to `Order.txt` (8-digit ID ending in the day, date, time, customer, status, payment) | `src/CheckoutService.cpp`, `PosStorage.cpp` | Cashier |
-| Save purchased products to `OrderDetail.txt` (order ID, product ID, barcode, quantity) | `src/CheckoutService.cpp`, `PosStorage.cpp` | Cashier |
-| Save the bill to `Bill.txt` (9-digit Bill ID, customer, order ID, item rates, totals, status) | `src/CheckoutService.cpp`, `PosStorage.cpp` | Cashier |
-| On-hold orders, Mark as Paid with deferred stock deduction, Archive workflow, referential deletion lock | `CheckoutService.cpp`, `HistoryService.cpp`, `ProductService.cpp` | Cashier, Manager |
+| Display product specifications from `Product.txt` on barcode scan | `src/barcode/PosScanner.cpp`, `src/pos/ProductService.cpp` | Cashier |
+| Manage `Product.txt` with space-separated fields, quoted strings, and a `#` end-of-line marker | `src/storage/PosStorage.cpp`, `src/pos/ProductService.cpp` | Manager, Storage |
+| Record the order and generate a bill with live inventory validation | `src/pos/CartService.cpp`, `src/pos/CheckoutService.cpp` | Cashier |
+| View the product description on scan or via the inline Description button | `CurrentOrderPage`, `src/pos/ProductService.cpp` | Cashier |
+| Save orders to `Order.txt` (8-digit ID ending in the day, date, time, customer, status, payment) | `src/pos/CheckoutService.cpp`, `src/storage/PosStorage.cpp` | Cashier |
+| Save purchased products to `OrderDetail.txt` (order ID, product ID, barcode, quantity) | `src/pos/CheckoutService.cpp`, `src/storage/PosStorage.cpp` | Cashier |
+| Save the bill to `Bill.txt` (9-digit Bill ID, customer, order ID, item rates, totals, status) | `src/pos/CheckoutService.cpp`, `src/storage/PosStorage.cpp` | Cashier |
+| On-hold orders, Mark as Paid with deferred stock deduction, Archive workflow, referential deletion lock | `src/pos/CheckoutService.cpp`, `src/pos/HistoryService.cpp`, `src/pos/ProductService.cpp` | Cashier, Manager |
 
 ---
 
@@ -236,7 +236,7 @@ The standalone barcode generator, uploaded-image reader, and single webcam scan 
 
 ## Architecture & System Flow
 
-The backend is split into small services that receive their dependencies by reference at construction (non-owning dependency injection). The Qt UI layer (`PosWindow`, `main.cpp`) sits on top and calls the services.
+The backend is split into small services that receive their dependencies by reference at construction (non-owning dependency injection). The Qt UI layer (`PosWindow`, `src/app/main.cpp`) sits on top and calls the services.
 
 ```mermaid
 flowchart TD
@@ -431,25 +431,13 @@ ISE-Project/
 ├── CMakeLists.txt                         # CMake build script
 ├── README.md                              # This file
 ├── .gitignore                             # Git ignore rules
-├── ReaderContracts.h                      # Shared Increment 1 reader structs
-├── PosTypes.h                             # Shared Increment 2 business structs and enums
-├── IPosStore.h                            # Pure abstract storage interface
-├── PosStorage.h / .cpp                    # File storage implementation (4 text files)
-├── IdGenerator.h / .cpp                   # Product, order, and bill ID generation
-├── ProductService.h / .cpp                # Product catalogue and stock validation service
-├── BarcodeAssetService.h / .cpp           # Barcode generation and PNG asset helper
-├── CartService.h / .cpp                   # Cart management and live stock verification
-├── PricingCalculator.h / .cpp             # Rounding and payable calculation engine
-├── PosScanner.h / .cpp                    # Continuous POS camera scanning adapter
-├── camera-harness.h / .cpp                # ImageSource: OpenCV capture, locate, straighten
-├── barcodeGenerator.h / .cpp              # Code 128 Set B encoder and checksum verification
-├── BarcodePlotter.h / .cpp                # Barcode renderer and QImage conversion
-├── BarcodeImageIO.h / .cpp                # PNG image saving helpers
-├── BarcodeDecoder.h / .cpp                # Custom Code 128 Set B barcode decoder
-├── main.cpp                               # Application entry point and POS window integration
-├── src/                                   # Checkout and History subsystem
-│   ├── CheckoutService.h / .cpp           # Bill generation, stock deduction, payment recording
-│   └── HistoryService.h / .cpp            # Order history retrieval, deferred payment, archive
+├── src/
+│   ├── app/                               # Application entry point
+│   │   └── main.cpp
+│   ├── ui/                                # PosWindow
+│   ├── barcode/                           # Barcode engine, camera and scanner
+│   ├── pos/                               # POS services and shared types
+│   └── storage/                           # Storage interface, implementation and IDs
 ├── assets/                                # UI icons and generated barcode PNGs
 │   ├── arrow-right.svg
 │   ├── chevron-left.svg
@@ -497,24 +485,24 @@ Click any diagram to open it full size.
 
 [![Data Records Diagram](documentation/Increment%202/Diagrams/UML-DataRecords.png)](documentation/Increment%202/Diagrams/UML-DataRecords.png)
 
-The full class dictionary, relationship list, and PlantUML / Mermaid source are in [`Increment2_UML_Class_Structure.md`](documentation/Increment%202/Increment2_UML_Class_Structure.md). The user interface (`PosWindow`, `main.cpp`) is intentionally not part of the class diagrams.
+The full class dictionary, relationship list, and PlantUML / Mermaid source are in [`Increment2_UML_Class_Structure.md`](documentation/Increment%202/Increment2_UML_Class_Structure.md). The user interface (`PosWindow`, `src/app/main.cpp`) is intentionally not part of the class diagrams.
 
 ### Module Reference
 
 | Module | Files | Responsibility |
 |---|---|---|
-| **`IPosStore` / `PosStorage`** | `IPosStore.h`, `PosStorage.h/.cpp` | Abstract interface and file-backed persistence for `Product.txt`, `Order.txt`, `OrderDetail.txt`, and `Bill.txt`. |
-| **`IdGenerator`** | `IdGenerator.h/.cpp` | Generates sequential 8-digit Order IDs, 9-digit Bill IDs, and product IDs. |
-| **`ProductService`** | `ProductService.h/.cpp` | Product lookup, live inventory checks (`hasStock`), stock deduction (`deductStock`), and catalogue create / update / remove. |
-| **`BarcodeAssetService`** | `BarcodeAssetService.h/.cpp` | Reuses the Increment 1 encoder and renderer to preview barcodes and save barcode PNG assets under `assets/`. |
-| **`CartService`** | `CartService.h/.cpp` | Manages working cart items, validates stock before adding, checks unit consistency, and calculates row totals. |
-| **`PricingCalculator`** | `PricingCalculator.h/.cpp` | Pure calculator for subtotal, tax, discount, and payable using integer paisa math with half-paisa rounding up. |
-| **`PosScanner`** | `PosScanner.h/.cpp` | Continuous camera scanner adapter around `ImageSource` and `BarcodeDecoder`, filtering duplicate frame scans. |
-| **`CheckoutService`** | `src/CheckoutService.h/.cpp` | Validates payments, deducts inventory, assigns IDs, and saves complete Paid or OnHold transactions. |
-| **`HistoryService`** | `src/HistoryService.h/.cpp` | Lists non-archived orders, retrieves exact saved bills, completes payment via `markPaid`, and archives orders. |
-| **`ImageSource`** | `camera-harness.h/.cpp` | Low-level camera stream grabber, gradient-tensor localization, and perspective warping. |
-| **`BarcodeDecoder`** | `BarcodeDecoder.h/.cpp` | Strict Code 128 Set B decoder with Otsu binarization, 31-line sampling, and independent checksum verification. |
-| **`barcodeGenerator`, `BarcodePlotter`, `BarcodeImageIO`** | `barcodeGenerator.*`, `BarcodePlotter.*`, `BarcodeImageIO.*` | Increment 1 utilities: validation and Code 128 Set B encoding with Mod-103 checksum, barcode rendering to `cv::Mat` / `QImage`, and PNG saving. |
+| **`IPosStore` / `PosStorage`** | `src/storage/IPosStore.h`, `src/storage/PosStorage.h/.cpp` | Abstract interface and file-backed persistence for `Product.txt`, `Order.txt`, `OrderDetail.txt`, and `Bill.txt`. |
+| **`IdGenerator`** | `src/storage/IdGenerator.h/.cpp` | Generates sequential 8-digit Order IDs, 9-digit Bill IDs, and product IDs. |
+| **`ProductService`** | `src/pos/ProductService.h/.cpp` | Product lookup, live inventory checks (`hasStock`), stock deduction (`deductStock`), and catalogue create / update / remove. |
+| **`BarcodeAssetService`** | `src/barcode/BarcodeAssetService.h/.cpp` | Reuses the Increment 1 encoder and renderer to preview barcodes and save barcode PNG assets under `assets/`. |
+| **`CartService`** | `src/pos/CartService.h/.cpp` | Manages working cart items, validates stock before adding, checks unit consistency, and calculates row totals. |
+| **`PricingCalculator`** | `src/pos/PricingCalculator.h/.cpp` | Pure calculator for subtotal, tax, discount, and payable using integer paisa math with half-paisa rounding up. |
+| **`PosScanner`** | `src/barcode/PosScanner.h/.cpp` | Continuous camera scanner adapter around `ImageSource` and `BarcodeDecoder`, filtering duplicate frame scans. |
+| **`CheckoutService`** | `src/pos/CheckoutService.h/.cpp` | Validates payments, deducts inventory, assigns IDs, and saves complete Paid or OnHold transactions. |
+| **`HistoryService`** | `src/pos/HistoryService.h/.cpp` | Lists non-archived orders, retrieves exact saved bills, completes payment via `markPaid`, and archives orders. |
+| **`ImageSource`** | `src/barcode/camera-harness.h/.cpp` | Low-level camera stream grabber, gradient-tensor localization, and perspective warping. |
+| **`BarcodeDecoder`** | `src/barcode/BarcodeDecoder.h/.cpp` | Strict Code 128 Set B decoder with Otsu binarization, 31-line sampling, and independent checksum verification. |
+| **`barcodeGenerator`, `BarcodePlotter`, `BarcodeImageIO`** | `src/barcode/barcodeGenerator.*`, `src/barcode/BarcodePlotter.*`, `src/barcode/BarcodeImageIO.*` | Increment 1 utilities: validation and Code 128 Set B encoding with Mod-103 checksum, barcode rendering to `cv::Mat` / `QImage`, and PNG saving. |
 
 ---
 
@@ -541,7 +529,7 @@ The full class dictionary, relationship list, and PlantUML / Mermaid source are 
 | Barcode symbology and libraries | **Code 128 Set B**, with the encoder, checksum, and decoder written by the team. No external barcode library is used. |
 | Storage abstraction | Services depend on the **`IPosStore` interface**, implemented by `PosStorage`. The file format is isolated behind it. |
 | Dependency injection | High-level services receive **non-owning references** to their dependencies at construction (`IPosStore&`, `ProductService&`, `PricingCalculator&`, `IdGenerator&`, `ImageSource&`, `BarcodeDecoder&`). |
-| Pure data records | Structs in `PosTypes.h` (`Product`, `CartItem`, `SaleRecord`, `Totals`, and others) hold values only, with no behavior. |
+| Pure data records | Structs in `src/pos/PosTypes.h` (`Product`, `CartItem`, `SaleRecord`, `Totals`, and others) hold values only, with no behavior. |
 | Reuse of Increment 1 | `PosScanner` adapts the camera harness and decoder to continuous scanning, and `BarcodeAssetService` adapts barcode plotting and saving. |
 | Money and quantities | **Integer paisas and thousandths** everywhere. Half-paisa rounds up with `(rate * qty + 500) / 1000`. |
 | Price snapshots | A cart row keeps the price, tax, and discount captured when it was added, so catalogue edits cannot change an item already scanned. |
@@ -558,11 +546,11 @@ The full history is in [`documentation/Decisions.md`](documentation/Decisions.md
 
 | Member | Area of ownership | Assigned source files |
 |---|---|---|
-| **Zaryab** (P1) | Desktop GUI, page navigation, UI integration, and build setup | `main.cpp`, `CMakeLists.txt`, `assets/` |
-| **Nosher** (P2) | Product catalogue service, inventory rules, and barcode asset generation | `ProductService.h/.cpp`, `BarcodeAssetService.h/.cpp` |
-| **Khurram** (P3) | Data storage engine (4 files), storage interface, and ID sequencing | `IPosStore.h`, `PosStorage.h/.cpp`, `IdGenerator.h/.cpp` |
-| **Rayyan** (P4) | Cart service, pricing and rounding calculations, and continuous POS camera scanning | `CartService.h/.cpp`, `PricingCalculator.h/.cpp`, `PosScanner.h/.cpp` |
-| **Rayan Dar** (P5) | Bill checkout, stock deduction, order history, deferred payment, and archiving | `src/CheckoutService.h/.cpp`, `src/HistoryService.h/.cpp` |
+| **Zaryab** (P1) | Desktop GUI, page navigation, UI integration, and build setup | `src/app/main.cpp`, `CMakeLists.txt`, `assets/` |
+| **Nosher** (P2) | Product catalogue service, inventory rules, and barcode asset generation | `src/pos/ProductService.h/.cpp`, `src/barcode/BarcodeAssetService.h/.cpp` |
+| **Khurram** (P3) | Data storage engine (4 files), storage interface, and ID sequencing | `src/storage/IPosStore.h`, `src/storage/PosStorage.h/.cpp`, `src/storage/IdGenerator.h/.cpp` |
+| **Rayyan** (P4) | Cart service, pricing and rounding calculations, and continuous POS camera scanning | `src/pos/CartService.h/.cpp`, `src/pos/PricingCalculator.h/.cpp`, `src/barcode/PosScanner.h/.cpp` |
+| **Rayan Dar** (P5) | Bill checkout, stock deduction, order history, deferred payment, and archiving | `src/pos/CheckoutService.h/.cpp`, `src/pos/HistoryService.h/.cpp` |
 
 ---
 

@@ -12,25 +12,31 @@ if(NOT OpenCV_FOUND)
 endif()
 
 add_executable(Eyeris MACOSX_BUNDLE
-    main.cpp
-    barcodeGenerator.cpp
-    BarcodePlotter.cpp
-    BarcodeImageIO.cpp
-    camera-harness.cpp
-    BarcodeDecoder.cpp
-    PosStorage.cpp
-    IdGenerator.cpp
-    BarcodeAssetService.cpp
-    ProductService.cpp
-    PricingCalculator.cpp
-    CartService.cpp
-    PosScanner.cpp
-    CheckoutService.cpp
-    HistoryService.cpp
-    PosWindow.cpp
+    src/app/main.cpp
+    src/barcode/barcodeGenerator.cpp
+    src/barcode/BarcodePlotter.cpp
+    src/barcode/BarcodeImageIO.cpp
+    src/barcode/camera-harness.cpp
+    src/barcode/BarcodeDecoder.cpp
+    src/storage/PosStorage.cpp
+    src/storage/IdGenerator.cpp
+    src/barcode/BarcodeAssetService.cpp
+    src/pos/ProductService.cpp
+    src/pos/PricingCalculator.cpp
+    src/pos/CartService.cpp
+    src/barcode/PosScanner.cpp
+    src/pos/CheckoutService.cpp
+    src/pos/HistoryService.cpp
+    src/ui/PosWindow.cpp
 )
 
-target_include_directories(Eyeris PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_include_directories(Eyeris PRIVATE
+    ${OpenCV_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/barcode
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pos
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/storage
+)
 target_compile_definitions(Eyeris PRIVATE
     EYERIS_PROJECT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
     EYERIS_SOURCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
