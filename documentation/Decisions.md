@@ -6,8 +6,8 @@
 - **Programming language:** C++
 - **Development model:** Incremental software development
 - **Initially recorded:** November 9, 2026
-- **Last revised:** November 12, 2026
-- **Status:** Confirmed team decisions
+- **Last revised:** November 23, 2026
+- **Status:** Confirmed decisions, proposals, and open questions
 
 ## 1. Purpose
 
@@ -189,7 +189,7 @@ The team will apply incremental development, requirements engineering, modularit
 
 ## 10. Document maintenance
 
-This document reflects team decisions as of November 12, 2026. The earlier ZXing decoding and Qt camera plans were superseded after clarification of the library constraint and the team's revised division of work. The November 12 integration adopts OpenCV rendering with a Qt image adapter. Future additions should distinguish confirmed decisions, revisions, superseded decisions, and unresolved matters.
+The Increment 1 record reflects team decisions through November 12, 2026. The earlier ZXing decoding and Qt camera plans were superseded after clarification of the library constraint and the team's revised division of work. The November 12 integration adopts OpenCV rendering with a Qt image adapter. Future additions should distinguish confirmed decisions, revisions, superseded decisions, and unresolved matters.
 
 ## 11. Increment 2
 
@@ -207,3 +207,103 @@ This document reflects team decisions as of November 12, 2026. The earlier ZXing
 - Decide when Add is re-enabled and how the quantity input behaves when switching products.
 
 See [Increment 2 Requirements](Increment%202/Increment%202%20Requirements.md) for the supplied assignment requirements.
+
+## 12. Increment 3
+
+### Confirmed decisions
+
+| Topic | Decision |
+| --- | --- |
+| C++ convention | Use `using namespace std;` throughout the project headers and source files. The implementation proposal uses unqualified standard-library names in its declarations. |
+| Role selection | Launch Eyeris with a large **Eyeris** title and **Cashier** and **Manager** choices. Open the interface for the selected role. Keep the existing scan-to-cart and quick hold/resume actions in the cashier flow. |
+| Manager PIN | Use a four-digit manager PIN. Provide a button to change it by entering the current PIN and the new PIN. Support macOS and Windows. First-time setup and the exact prompt flow are still under discussion. |
+| Products & Discounts | Rename the manager's Product Catalogue to **Products & Discounts**. Put **Flat Discounts** at the top of its Products section, with controls to add or edit the seasonal promotion and add or edit the special discount, including enabling or disabling them. Edit per-item or per-kg product discounts in the product form. |
+| Discount scope | Product discounts belong to individual products. Seasonal discounts apply automatically at bill level when a promotion is active and the bill falls within its dates. Special discounts also apply at bill level and are capped at 8%. Add all applicable discount percentages and apply the combined rate to one base. For example, 10% seasonal and 5% special give 15% off that base. |
+| Rounding | Calculate and store intermediate monetary amounts to two decimal places. Round only the final payable for each bill to the nearest whole PKR. Quantities keep their existing Count and Weight precision. The exact tie rule and treatment of rounding differences on the bill remain open. |
+| Seasonal promotions | Allow one enabled seasonal promotion at a time. Other saved promotions can remain inactive until the manager enables one. |
+| Automatic special discount | The manager sets the special discount rate and enables or disables it in **Flat Discounts**. While enabled, it applies automatically to bills at cashier checkout. The cashier completes the normal checkout without a separate discount action or manager approval per bill. |
+| Stock reservations | A held order reserves its saved quantities so another order cannot sell those quantities while the hold is open. This supersedes Increment 2's no-reservation holds. |
+| Repricing resumed holds | On resuming a held order, recalculate using the current catalogue unit prices, tax, and discounts even if the saved items and quantities are unchanged. The customer is charged the latest amount when the unpaid order is completed. |
+| Paying a held order | Replace History's **Mark as Paid** with **Resume Order**. Both History and the existing **Held Orders** picker return the order to Current Order, where the cashier reviews the current prices, tax, and discounts and takes payment. |
+| Editing a paid bill | Both roles have Order History and the bill stays there during a **Modify Bill** action. The manager can change paid bills and issue refunds. The cashier can draft quantity changes on existing lines, and the manager approves and commits them. Recalculate using the original unit prices, tax and discount rules, including the seasonal and special rates applied at payment. The seven-day eligibility window still applies. |
+| Paid bill change state | Save **Unchanged**, **Modified** or **Complete Refund**. History and the revised bill display **Modified** or **Complete Refund** when applicable. Unchanged bills have no badge. A complete refund sets all quantities to zero. Settlement, inventory treatment, and report treatment are specified as draft defaults in the proposal. |
+| Seven-day cutoff | Use 168 elapsed hours from the original payment time. An approved edit can save at exactly 168 hours. Check eligibility at save, and use the original payment time even after a correction. This is the team's working interpretation of the instructor's wording. |
+| Paid bill PDFs | Automatically generate and save a PDF when a bill is paid, including a resumed hold. Store the PDF path with the bill in persistent data. In Order History, disable **Generate Bill PDF** once that bill has a saved PDF. Both roles can access the bill PDF. |
+| Revised bill PDFs | After a successful paid-bill edit, generate a revised PDF from the updated saved bill and replace the previous PDF. |
+| PDF contents | Print the saved bill information shown in Current Order and Order History, with any additional bill summary and line fields required by the assignment. Use the bill's saved product quantities, prices, taxes, discounts, totals, and payment details. Omit the PDF path and filename from the printed content. |
+| Archive and unarchive | Archiving a paid bill deletes its generated PDF. Add **Unarchive** in Order History. Unarchiving a paid bill makes **Generate Bill PDF** available again. The cashier or manager can generate the PDF from Order History, after which the button is disabled again. |
+| Unarchiving an unpaid hold | Restore the hold only when all required quantities can be reserved again. If any item is unavailable in the required quantity, leave the order archived and show red text naming the products that need to be restocked. |
+| Increment 3 demo bills | Generate fresh bills for the Increment 3 demo so they include the new pricing and payment fields. Confirm separately whether grading expects the app to migrate older bills. |
+| Branch sequence | Plan on `increment_3` from `10de6a6c66d8926daf110a7f20066b145ff6872e`. Publish the approved plan in a docs-only commit. Rayyan's camera recognition work is a separate dependency based on `increment_2`. After review and integration into `increment_2`, merge that branch into `increment_3`. Merge `increment_3` into `main` at release. Keep `c32482d3746162efd1aa1946f49db7ae6a6f500f` as the original Increment 2 grading reference. |
+
+### Category and barcode rules chosen for planning
+
+Zaryab delegated these choices for review with the implementation proposal.
+
+- Use category IDs `10`–`99` so the category prefix fits the existing six-digit barcode format. Issue a four-digit suffix within each category from `0001` through `9999`. Retain the record of issued suffixes so retired labels cannot identify another product.
+- Preserve existing labels during migration. Create a placeholder category for each prefix found in existing barcodes and assign those products to it. Managers can rename those categories and reclassify individual products.
+- Keep the category ID fixed after it has issued a barcode. Allow editing the name and acronym, and allow deletion only for categories that have never issued a barcode. Reclassifying a product issues a new barcode and retires its old label. The product ID stays the same and historical order lines retain their saved barcode. The catalogue and storage own these rules. Scanner recognition still hands off a six-digit code.
+
+### Credential and file storage chosen for planning
+
+Zaryab delegated the storage choice with macOS and Windows as supported platforms. Use QtKeychain for the manager PIN so Qt can use macOS Keychain or Windows Credential Store. Keep the POS text records under the project data folder and persist managed PDF paths relative to it, so paths work on both platforms. Verify credential setup, PIN changes, and reopening saved records and PDFs on both platforms.
+
+### Required manager reports
+
+The assignment calls for these reports in tabular form. PDF export applies to an individual bill.
+
+| Report | Required data |
+| --- | --- |
+| Incomplete orders | List orders that are neither paid nor archived and give their combined bill total. |
+| Completed orders | List completed orders and give their combined total. |
+| Cash sales | Show cash sales by day, week, month, year, or custom date range. |
+| All sales | List all sales and show the total sales amount and total discounts. |
+| Top ten products sold | List the top ten sold products in descending order with each product's remaining stock. |
+| Top ten by remaining stock | List the ten products with the highest remaining stock in descending order. |
+
+### Manager Reports page
+
+- Add **Reports** to the manager dashboard. The manager selects a report and its options before clicking **Generate Report**. Retain the required incomplete-order, completed-order, cash-sales, all-sales, and product tables above.
+- For sales, offer day, week, month, year, all time, and the assignment's custom date range. Allow selecting one or more payment methods, including Cash, Card, and Wallet. The cash-sales report uses the Cash filter.
+- Show payment-method mix as a separate analytic with the number and percentage of completed checkouts per method for the selected period.
+- For the top ten products sold, offer day, month, year, and all time. Show quantity sold and current remaining stock. Show both highest and lowest remaining stock as inventory reports.
+- Rank Count and Weight products separately and label the units.
+- Exclude archived bills from manager reports and their totals. Include held bills in **Incomplete Orders** and show the stock each hold reserves. Held bills contribute to the incomplete bill total and reservation figures. Sales and payment mix use completed payments.
+
+**Additional insights chosen for planning:** show the number and amount of refunds and net collections in the sales summary, and the out-of-stock product count in the inventory summary. Show on-hand, reserved, and available stock in inventory reports so the manager can see why some stock is unavailable. Calculate payment-method shares across all methods in the selected period so those shares are independent of the sales-table payment filter. These insights use the planned sales, refund, and inventory records.
+
+### Tax and discount calculation chosen for planning
+
+Zaryab delegated the tax treatment. Calculate sales tax on discounted merchandise prices, following the [FBR's guidance on discounted retail sales](https://download1.fbr.gov.pk/Docs/20223181434130170StandardizedTaxInvoice.pdf).
+
+- Subtract per-product discounts first. Add the applicable seasonal and special percentages and apply the combined percentage to the remaining pretax merchandise subtotal. Record the seasonal and special amounts separately.
+- Allocate the bill-level discounts to product lines in proportion to each line's subtotal after product discount. Calculate each line's tax at its configured rate on the resulting amount and add the tax to the discounted bill. Round the final payable to whole PKR under the agreed rule.
+- Configure tax as a percentage per product. For existing products with a positive unit price, derive the starting percentage from the old tax-per-unit amount and unit price. Save the applied rate on each paid line so quantity-only edits can reproduce the original pricing rules.
+
+### Proposals awaiting confirmation
+
+| Topic | Recommended behavior |
+| --- | --- |
+| PIN setup | Create and confirm the first PIN during store setup. Prompt on entry to Manager and when approving the cashier's final paid-edit draft. Confirm the new PIN when changing it. |
+| Resumed payment validation | Verify the total again before taking payment. If it has changed since display, show the revised amount and get a new confirmation. Preserve the original order and bill IDs. |
+| Paid-edit approval and settlement | The manager approves the exact quantity changes, including any amount to collect or return. The cashier records that difference against the same order and bill. A change to the draft or a repeat edit needs fresh approval. Keep archives read-only. |
+| Stock movement | Calculate sellable stock as on-hand quantity less held reservations. Let a resumed hold use its own reservation. Update reservations when a hold is saved or archived, and convert a reservation into a stock deduction when payment succeeds. Apply the quantity difference for an approved paid edit. Save inventory and the transaction together. An invalid edit or save failure leaves the saved order and stock intact. |
+| PDF file handling | Name the managed PDF by bill ID. Use a separate **Open Bill PDF** action when the file exists. If automatic export fails after payment or the PDF is missing, keep the paid record and make **Generate Bill PDF** available to retry. |
+| Report calculation rules | Use local calendar periods and show the selected dates. Record refunds on the dates they occur so a later refund does not change a previous period's collections. Use sellable stock after reservations for inventory rankings. Confirm whether the instructor expects a single top-ten list instead of separate Count and Weight lists. |
+
+### Proposed team ownership
+
+| Teammate | Increment 3 responsibility |
+| --- | --- |
+| Zaryab (P1) | Qt role selection and pages, approval workflow, reports UI, PDF action, shared POS types, and integration. |
+| Nosher (P2) | Category and catalogue services, barcode assignment and relabeling, inventory management, and stock difference rules. |
+| Khurram (P3) | Storage interface, text file formats, migrations, IDs, coordinated saves, and report queries. |
+| Rayyan (P4) | Cart repricing, pricing and discount calculation, and applying active seasons. Continue physical camera recognition separately. |
+| Rayan Dar (P5) | Checkout, paid-edit eligibility and settlement, saved bills and history, and PDF rendering from saved data. |
+
+### Open questions
+
+- **Ask the instructor about file layouts and compatibility.** Confirm whether the specified field orders are exact, whether strings with spaces can be quoted, where supporting information may be stored, and whether legacy billing data must be migrated for grading. Quantity edits need saved line units, unit prices, tax rates and per-unit product discounts, and the bill's seasonal and special rates. The required summary and detail amounts alone do not provide all these inputs. Also settle where to record original payment time, settlement changes, and the PDF path.
+- **Review paid-edit and archive defaults.** Review the proposed settlement records, revision history, handling of deleted or reclassified products and unit changes, stock returns, archive permissions and PDF removal failures.
+- **Review calculation defaults.** Review the combined discount cap, exact-half rounding, seasonal date boundaries, report dates and ranges, refund totals and ranking ties. Confirm whether the instructor's “all sales” report must include archived paid sales, whether separate Count and Weight lists are acceptable, and whether the seven-day cutoff needs clarification.
+- **Confirm the team handoff.** Review the [Increment 3 implementation proposal](Increment%203/Increment3proposal.md), including the ownership split, shared-header baseline, integration order, and verification coverage for the November 26 class demo. GitHub invitations are separate logistics.
