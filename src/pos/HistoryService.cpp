@@ -1,10 +1,10 @@
 #include "HistoryService.h"
 
+#include "BillPdfService.h"
 #include "IPosStore.h"
 #include "ProductService.h"
 
 #include <algorithm>
-#include <unordered_set>
 #include <utility>
 
 using namespace std;
@@ -13,81 +13,26 @@ namespace {
 
 SaleRecord* findSale(StoreData& data, const string& orderId)
 {
-    const auto sale = find_if(
-        data.sales.begin(), data.sales.end(),
-        [&orderId](const SaleRecord& record) {
-            return record.ids.orderId == orderId;
-        });
-
+    const auto sale = find_if(data.sales.begin(), data.sales.end(), [&orderId](const SaleRecord& record) {
+        return record.ids.orderId == orderId;
+    });
     return sale == data.sales.end() ? nullptr : &*sale;
 }
 
-Status validatePayment(const Payment& payment, int64_t payable)
+bool canUsePdf(const SaleRecord& sale)
 {
-    if (!payment.recorded || payment.amount < 0 || payment.amount != payable) {
-        return {false, "Record a payment equal to the saved total payable."};
-    }
-    if (payment.merchant.find_first_of("\r\n") != string::npos) {
-        return {false, "The payment merchant must be on one line."};
-    }
-
-    switch (payment.mode) {
-    case PaymentMode::Cash:
-    case PaymentMode::Card:
-    case PaymentMode::Wallet:
-        return {true, {}};
-    }
-
-    return {false, "Choose cash, card, or wallet as the payment mode."};
+    return sale.status == OrderStatus::Paid && sale.payment.recorded && sale.paidAt && !sale.archived;
 }
 
-bool samePayment(const Payment& left, const Payment& right)
+bool hasManagedPdfReference(const SaleRecord& sale)
 {
-    return left.recorded == right.recorded &&
-           left.amount == right.amount &&
-           left.mode == right.mode &&
-           left.merchant == right.merchant;
-}
-
-Status validateHeldStock(const SaleRecord& sale, const vector<Product>& catalogue,
-                         const ProductService& products)
-{
-    if (sale.lines.empty()) {
-        return {false, "The held bill has no items."};
-    }
-
-    unordered_set<string> seenProducts;
-    for (const SaleLine& line : sale.lines) {
-        if (line.productId.empty() || line.barcode.empty() ||
-            !seenProducts.insert(line.productId).second) {
-            return {false, "The held bill contains an invalid or duplicate product."};
-        }
-
-        const auto live = find_if(
-            catalogue.begin(), catalogue.end(),
-            [&line](const Product& product) { return product.id == line.productId; });
-
-        if (live == catalogue.end() || live->barcode != line.barcode) {
-            return {false, "Product " + line.productId + " no longer matches the catalogue."};
-        }
-
-        // ProductService must prevent unit changes while a held bill references the product.
-        if (line.quantity <= 0 || (live->unit != Unit::Count && live->unit != Unit::Weight) ||
-            (live->unit == Unit::Count && line.quantity % 1000 != 0)) {
-            return {false, "Invalid quantity or measurement unit for " + line.acronym + "."};
-        }
-        if (!products.hasStock(*live, line.quantity)) {
-            return {false, "Insufficient stock for " + line.acronym + "."};
-        }
-    }
-
-    return {true, {}};
+    return sale.pdfPath == "bills/" + sale.ids.billId + ".pdf";
 }
 
 } // namespace
 
-HistoryService::HistoryService(IPosStore& store, ProductService& products)
-    : store_(store), products_(products)
+HistoryService::HistoryService(IPosStore& store, const ProductService& products, const BillPdfService& pdf)
+    : store_(store), products_(products), pdf_(pdf)
 {
 }
 
@@ -109,14 +54,10 @@ Result<vector<SaleRecord>> HistoryService::listByArchiveStatus(bool archived) co
     }
 
     auto& sales = data.value.sales;
-    sales.erase(
-        remove_if(sales.begin(), sales.end(),
-            [archived](const SaleRecord& sale) {
-                return (sale.status == OrderStatus::Archived) != archived;
-            }),
-        sales.end());
-
-    return {true, {}, move(sales)};
+    sales.erase(remove_if(sales.begin(), sales.end(), [archived](const SaleRecord& sale) {
+        return sale.archived != archived;
+    }), sales.end());
+    return {true, {}, std::move(sales)};
 }
 
 Result<SaleRecord> HistoryService::get(const string& orderId) const
@@ -125,66 +66,11 @@ Result<SaleRecord> HistoryService::get(const string& orderId) const
     if (!data.success) {
         return {false, "Could not read order history. " + data.message, {}};
     }
-
     auto* sale = findSale(data.value, orderId);
     if (!sale) {
         return {false, "Order not found.", {}};
     }
-
-    return {true, {}, move(*sale)};
-}
-
-Result<SaleRecord> HistoryService::markPaid(const string& orderId, const Payment& payment)
-{
-    auto data = store_.read();
-    if (!data.success) {
-        return {false, "Could not read order history. " + data.message, {}};
-    }
-
-    auto* sale = findSale(data.value, orderId);
-    if (!sale) {
-        return {false, "Order not found.", {}};
-    }
-    if (sale->status != OrderStatus::OnHold && sale->status != OrderStatus::Paid) {
-        return {false, "Only a held bill can accept a payment.", {}};
-    }
-
-    const Status validPayment = validatePayment(payment, sale->totals.payable);
-    if (!validPayment.success) {
-        return {false, validPayment.message, {}};
-    }
-
-    if (sale->status == OrderStatus::Paid) {
-        if (samePayment(sale->payment, payment)) {
-            // A repeated request returns the existing bill without another save.
-            return {true, {}, move(*sale)};
-        }
-        return {false, "This bill was already paid with different payment details.", {}};
-    }
-    if (sale->payment.recorded || sale->payment.amount != 0 || !sale->payment.merchant.empty()) {
-        return {false, "The held bill already contains payment data.", {}};
-    }
-
-    const Status stock = validateHeldStock(*sale, data.value.products, products_);
-    if (!stock.success) {
-        return {false, stock.message, {}};
-    }
-
-    const Status deduction = products_.deductStock(data.value.products, sale->lines);
-    if (!deduction.success) {
-        return {false, "Could not deduct stock. " + deduction.message, {}};
-    }
-
-    // Save the payment and stock deduction together.
-    sale->payment = payment;
-    sale->status = OrderStatus::Paid;
-
-    const Status saved = store_.save(data.value);
-    if (!saved.success) {
-        return {false, "Could not save the payment. " + saved.message, {}};
-    }
-
-    return {true, {}, move(*sale)};
+    return {true, {}, std::move(*sale)};
 }
 
 Status HistoryService::archive(const string& orderId)
@@ -193,18 +79,154 @@ Status HistoryService::archive(const string& orderId)
     if (!data.success) {
         return {false, "Could not read order history. " + data.message};
     }
+    auto* sale = findSale(data.value, orderId);
+    if (!sale || (sale->status != OrderStatus::OnHold && sale->status != OrderStatus::Paid)) {
+        return {false, "Only a saved held or paid bill can be archived."};
+    }
 
+    const bool paid = sale->status == OrderStatus::Paid;
+    if (sale->archived) {
+        return paid ? pdf_.finishRemoval(sale->ids.billId, true) : Status{true, {}};
+    }
+    if (paid) {
+        const auto staged = pdf_.stageRemoval(sale->ids.billId);
+        if (!staged.success) {
+            return staged;
+        }
+    }
+
+    sale->archived = true;
+    sale->pdfPath.clear();
+    auto saved = store_.save(data.value);
+    if (paid) {
+        // The saved archive flag determines whether the staged file is deleted or put back.
+        const auto finished = pdf_.finishRemoval(sale->ids.billId, saved.success);
+        if (!finished.success) {
+            if (!saved.message.empty()) {
+                saved.message += " ";
+            }
+            saved.message += (saved.success ? "Bill archived. " : "Could not restore the bill PDF. ") +
+                             finished.message;
+        }
+    }
+    return saved;
+}
+
+Result<vector<StockShortage>> HistoryService::unarchiveShortages(const string& orderId) const
+{
+    auto data = store_.read();
+    if (!data.success) {
+        return {false, "Could not read order history. " + data.message, {}};
+    }
+    const auto* sale = findSale(data.value, orderId);
+    if (!sale) {
+        return {false, "Order not found.", {}};
+    }
+    return shortagesForRestore(data.value, *sale);
+}
+
+Result<vector<StockShortage>> HistoryService::shortagesForRestore(const StoreData& data,
+                                                                 const SaleRecord& sale) const
+{
+    if (!sale.archived || (sale.status != OrderStatus::OnHold && sale.status != OrderStatus::Paid)) {
+        return {false, "Select an archived held or paid bill.", {}};
+    }
+    if (sale.status == OrderStatus::Paid) {
+        return {true, {}, {}};
+    }
+    return products_.shortages(data, sale.lines, {});
+}
+
+Status HistoryService::unarchive(const string& orderId)
+{
+    auto data = store_.read();
+    if (!data.success) {
+        return {false, "Could not read order history. " + data.message};
+    }
     auto* sale = findSale(data.value, orderId);
     if (!sale) {
         return {false, "Order not found."};
     }
-    if (sale->status == OrderStatus::Archived) {
-        return {true, {}};
+    const auto shortages = shortagesForRestore(data.value, *sale);
+    if (!shortages.success) {
+        return {false, shortages.message};
     }
-    if (sale->status != OrderStatus::OnHold && sale->status != OrderStatus::Paid) {
-        return {false, "Only a saved bill can be archived."};
+    if (!shortages.value.empty()) {
+        return {false, "Insufficient stock to restore the held bill."};
+    }
+    if (sale->status == OrderStatus::Paid) {
+        const auto finished = pdf_.finishRemoval(sale->ids.billId, true);
+        if (!finished.success) {
+            return finished;
+        }
+    } else {
+        // An active hold uses the live barcode for its reservation, including after a relabel.
+        for (auto& line : sale->lines) {
+            const auto product = find_if(data.value.products.begin(), data.value.products.end(),
+                [&line](const Product& item) { return item.id == line.productId; });
+            if (product == data.value.products.end()) {
+                return {false, "Held product no longer exists: " + line.name + "."};
+            }
+            line.barcode = product->barcode;
+        }
     }
 
-    sale->status = OrderStatus::Archived;
+    sale->archived = false;
+    sale->pdfPath.clear();
     return store_.save(data.value);
+}
+
+Result<SaleRecord> HistoryService::generatePdf(const string& orderId)
+{
+    auto data = store_.read();
+    if (!data.success) {
+        return {false, "Could not read order history. " + data.message, {}};
+    }
+    auto* sale = findSale(data.value, orderId);
+    if (!sale || !canUsePdf(*sale)) {
+        return {false, "Only an active paid bill can have a PDF.", {}};
+    }
+    const auto recovered = pdf_.finishRemoval(sale->ids.billId, false);
+    if (!recovered.success) {
+        return {false, recovered.message, {}};
+    }
+    if (hasManagedPdfReference(*sale) && pdf_.resolve(sale->pdfPath).success) {
+        return {true, {}, std::move(*sale)};
+    }
+
+    auto written = pdf_.write(*sale);
+    if (!written.success) {
+        return {false, written.message, {}};
+    }
+    if (sale->pdfPath == written.value) {
+        return {true, {}, std::move(*sale)};
+    }
+
+    sale->pdfPath = std::move(written.value);
+    auto saved = store_.save(data.value);
+    if (!saved.success) {
+        return {false, "Could not record the bill PDF in order history. " + saved.message, {}};
+    }
+    return {true, std::move(saved.message), std::move(*sale)};
+}
+
+Result<filesystem::path> HistoryService::openPdfPath(const string& orderId) const
+{
+    const auto sale = get(orderId);
+    if (!sale.success) {
+        return {false, sale.message, {}};
+    }
+    if (!canUsePdf(sale.value) || !hasManagedPdfReference(sale.value)) {
+        return {false, "This bill does not have an available PDF.", {}};
+    }
+    return pdf_.resolve(sale.value.pdfPath);
+}
+
+Status HistoryService::recoverPdfRemovals() const
+{
+    const auto data = store_.read();
+    if (!data.success) {
+        return {false, "Could not read order history. " + data.message};
+    }
+    return pdf_.reconcileRemovals(data.value);
 }

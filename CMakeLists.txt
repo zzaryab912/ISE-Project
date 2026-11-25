@@ -27,6 +27,7 @@ add_executable(Eyeris MACOSX_BUNDLE
     src/barcode/PosScanner.cpp
     src/pos/CheckoutService.cpp
     src/pos/HistoryService.cpp
+    src/pos/BillPdfService.cpp
     src/ui/PosWindow.cpp
 )
 
