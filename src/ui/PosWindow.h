@@ -1,64 +1,28 @@
 #pragma once
 
-#include "PosTypes.h"                                   // imports all the shared types, enums, classes
+#include "PosTypes.h"
 
 #include <QMainWindow>
 #include <QTimer>
-#include <optional>
 
 using namespace std;
 
-class ProductService;                                   // forward declarations, for all the services to be used here
-class BarcodeAssetService;
 class CartService;
-class PosScanner;
 class CheckoutService;
+class DiscountService;
 class HistoryService;
+class ManagerCataloguePage;
+class ProductService;
+class PosScanner;
+class ReportService;
+class ReportsPage;
 
-class QStackedWidget;
-class QTabWidget;
-class QWidget;
 class QImage;
+class QLabel;
+class QPushButton;
+class QStackedWidget;
 
 class PosWindow : public QMainWindow {
-private:
-    ProductService& products_;              // Product service, to look up, add or edit or delete products
-    BarcodeAssetService& images_;           // to generate a barcode image preview for add product menu
-    CartService& cart_;                     // for cart operations like add, remove, change quantity, and totals
-    PosScanner& scanner_;                   // start and stop and read from barcode scanner
-    CheckoutService& checkout_;             // checkout services, generate a paid or held bill
-    HistoryService& history_;               // retrieve saved orders, mark as paid or archive
-
-    Product selectedProduct_{};             // start product with default values, the rest of the lines here do the same thing
-    bool hasSelectedProduct_ = false;
-    string selectedOrderId_{};
-    SaleRecord displayedBill_{};
-    bool hasDisplayedBill_ = false;
-    QTimer cameraTimer_{};
-    bool currentOrderOpened_ = false;
-    Status cameraStatus_{};
-    bool savingBill_ = false;
-    bool choosingHeldOrder_ = false;
-    string resumedOrderId_;
-    optional<Product> pendingProduct_;
-    optional<Product> selectedCatalogueProduct_;
-
-    QStackedWidget* pages_ = nullptr;       // this is the widget that holds the pages, shows one at a time
-    QWidget* currentOrderPage_ = nullptr;
-    QWidget* historyPage_ = nullptr;
-    QWidget* cataloguePage_ = nullptr;
-    QTabWidget* catalogueTabs_ = nullptr;   // these are pointers to all the pages
-
-    void stopCurrentOrderCamera();
-    void closeEvent(QCloseEvent* event) override;
-    void generateCurrentBill(OrderStatus status);
-    void addScannedProduct(const string& barcode);
-    void displayOrder(const SaleRecord& order);
-    void clearOrderSelection();
-    string refreshCart();
-    void refreshHistory();
-    void refreshCatalogue();
-
 public:
     class CurrentOrderView : public QWidget {
     public:
@@ -68,14 +32,16 @@ public:
         virtual void resetCheckoutFields() = 0;
         virtual void showCameraPreview(const QImage& image) = 0;
         virtual void showScannerMessage(const string& message) = 0;
-        virtual void showScannedProduct(const Product& product) = 0;
+        virtual void showScannedProduct(const ProductStock& item) = 0;
         virtual void showCart(const vector<CartItem>& items, const vector<optional<int64_t>>& amounts,
                               const optional<Totals>& totals) = 0;
         virtual void showCartError(const string& message) = 0;
         virtual void setBillSaving(bool saving) = 0;
         virtual void showBillError(const string& message) = 0;
         virtual void selectQuantity(const string& id) = 0;
+        virtual void clearQuantityDraft(const string& id) = 0;
         virtual void setCustomer(const Customer& customer) = 0;
+        virtual void setCheckoutOrder(const SaleRecord* sale) = 0;
         virtual bool hasDraft() const = 0;
         virtual bool hasQuantityDraft() const = 0;
     };
@@ -83,53 +49,94 @@ public:
     class OrderHistoryView : public QWidget {
     public:
         using QWidget::QWidget;
-        virtual Result<Payment> readPayment() const = 0;
         virtual bool showingArchives() const = 0;
         virtual void setArchiveView(bool archived) = 0;
         virtual void showError(const string& message) = 0;
         virtual void showOrders(const vector<SaleRecord>& orders, const string& selectedId) = 0;
         virtual void showBill(const SaleRecord& order) = 0;
         virtual void clearBill() = 0;
+        virtual void showPaidEdit(const PaidEditDraft& draft) = 0;
+        virtual void clearPaidEditApproval() = 0;
+        virtual void setPaidEditBusy(bool busy) = 0;
+        virtual void setPaidEditApproved(bool approved) = 0;
+        virtual void setPdfActions(bool canGenerate, bool canOpen) = 0;
+        virtual void setArchiveActionsAvailable(bool available) = 0;
+        virtual void showUnarchiveShortages(const vector<StockShortage>& shortages) = 0;
     };
 
-    class CatalogueView : public QWidget {
-    public:
-        using QWidget::QWidget;
-        virtual string readBarcode() const = 0;
-        virtual Result<Product> readNewProduct() const = 0;
-        virtual Result<Product> readEditedProduct() const = 0;
-        virtual void showError(const string& message) = 0;
-        virtual void showProducts(const vector<Product>& products, const string& selectedId) = 0;
-        virtual void showProduct(const Product& product) = 0;
-        virtual void setHeldReference(bool) {}
-        virtual void clearProduct() = 0;
-        virtual void showBarcodePreview(const QImage& image) = 0;
-        virtual void showSavedProduct(const Product& product) = 0;
-    };
+    PosWindow(ProductService& products, DiscountService& discounts, CartService& cart,
+              PosScanner& scanner, CheckoutService& checkout, HistoryService& history,
+              const ReportService& reports, ManagerPinService& access, QWidget* parent = nullptr);
 
-    PosWindow(ProductService& products, BarcodeAssetService& images,
-              CartService& cart, PosScanner& scanner,
-              CheckoutService& checkout, HistoryService& history,
-              QWidget* parent = nullptr);
-
-    void bindPages(QStackedWidget& pages, CurrentOrderView& currentOrder,
-                   OrderHistoryView& history, CatalogueView& catalogue, QTabWidget& catalogueTabs);
-
-    void onCameraTick();                                                        // reads next frame, updates preview, looks for a new barcode
-    void onCartQuantityChanged(const string& productId, int64_t quantity);      // updates existing row. zero removes the row here
+    void onRoleSelected(Role role);
+    void onChangePin(const string& currentPin, const string& newPin, const string& confirmation);
+    void onCameraTick();
     void onHeldOrdersClicked();
+    void onCartQuantityChanged(const string& productId, int64_t quantity);
     void cancelPendingQuantity(const string& productId);
-    void onGenerateBillClicked();                                               // below are all the actions
+    void onGenerateBillClicked();
     void onGenerateAndHoldClicked();
-    void onOrderSelected(const string& orderId);                                // loads and displays the saved bill for the order id
-    void onMarkPaidClicked();
-    void onArchiveClicked();
+    void onOrderSelected(const string& orderId);
+    void onResumeOrder(const string& orderId);
+    void onPreviewPaidEdit(const string& orderId, const vector<QuantityChange>& changes);
+    void onApprovePaidEdit(const string& pin);
+    void onCommitPaidEdit(int64_t settledDelta);
+    void cancelPaidEdit();
+    void onArchiveOrder(const string& orderId);
+    void onUnarchiveOrder(const string& orderId);
+    void onGeneratePdf(const string& orderId);
+    void onOpenPdf(const string& orderId);
+    void onGenerateReport(const ReportRequest& request);
     void showHistoryTab(bool archived);
-    void onProductSelected(const string& productId);                            // displays the details on the selected product
-    void onGeneratePreview();
-    void onSaveProduct();
-    void onUpdateProduct();                                                     // onsave, update, delete all talk to the productservice to carry out the actions
-    void onDeleteProduct();
-    void showPage(const string& pageName);                                      // switches the page in view. handles starting and stopping camera when switching pages too
-    void showCatalogueTab(const string& tabName);                               // switches between tabs inside the product catalogue page
+    void showPage(const string& pageName);
+    void setPdfRecoveryWarning(const string& message);
+
+private:
+    ProductService& products_;
+    DiscountService& discounts_;
+    CartService& cart_;
+    PosScanner& scanner_;
+    CheckoutService& checkout_;
+    HistoryService& history_;
+    const ReportService& reports_;
+    ManagerPinService& access_;
+
+    optional<Role> role_;
+    QStackedWidget* pages_ = nullptr;
+    QWidget* launchPage_ = nullptr;
+    CurrentOrderView* currentOrderPage_ = nullptr;
+    OrderHistoryView* historyPage_ = nullptr;
+    ManagerCataloguePage* cataloguePage_ = nullptr;
+    ReportsPage* reportsPage_ = nullptr;
+    QWidget* settingsPage_ = nullptr;
+    QWidget* sidebar_ = nullptr;
+    QLabel* settingsFeedback_ = nullptr;
+    QPushButton* changePin_ = nullptr;
+    vector<QPushButton*> navigation_;
+    QTimer cameraTimer_;
+    string selectedOrderId_;
+    string resumedOrderId_;
+    optional<PricingResult> currentQuote_;
+    optional<PaidEditDraft> paidEditDraft_;
+    optional<ManagerApproval> paidEditApproval_;
+    optional<Product> pendingProduct_;
+    optional<SaleRecord> displayedBill_;
+    string scannedBarcode_;
+    string pdfRecoveryWarning_;
+    bool busy_ = false;
+    bool currentOrderOpened_ = false;
+    bool choosingHeldOrder_ = false;
+
+    void enterRole(Role role);
+    void showRolePicker();
+    void updateNavigation();
+    void submitManagerPin(const string& pin, const string& confirmation, bool initialize);
+    void stopCurrentOrderCamera();
+    void closeEvent(QCloseEvent* event) override;
+    void generateCurrentBill(OrderStatus status);
+    void addScannedProduct(const string& barcode);
+    void displayOrder(const SaleRecord& order);
+    void clearOrderSelection();
+    string refreshCart();
+    void refreshHistory();
 };

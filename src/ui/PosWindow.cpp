@@ -1,9 +1,12 @@
 #include "PosWindow.h"
-#include "BarcodeAssetService.h"
 #include "BarcodePlotter.h"
 #include "CartService.h"
 #include "CheckoutService.h"
 #include "HistoryService.h"
+#include "ManagerCataloguePage.h"
+#include "ManagerPinService.h"
+#include "ReportService.h"
+#include "ReportsPage.h"
 #include "PosScanner.h"
 #include "ProductService.h"
 
@@ -11,11 +14,13 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <QFormLayout>
 #include <QGraphicsDropShadowEffect>
 #include <QGuiApplication>
 #include <QImage>
@@ -25,10 +30,12 @@
 #include <QListWidget>
 #include <QLocale>
 #include <QMouseEvent>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QScopedValueRollback>
@@ -39,8 +46,7 @@
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QSvgRenderer>
-#include <QTabBar>
-#include <QTabWidget>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWindow>
 
@@ -57,11 +63,10 @@ QString text(const string& value) { return QString::fromStdString(value); }
 
 QString fixedText(int64_t value, int scale, int places)
 {
-    return QString::number(value / scale) + "." +
-        QString::number(value % scale).rightJustified(places, '0');
+    const auto fraction = value % scale;
+    return (value < 0 ? QString("−") : QString()) + QString::number(qAbs(value / scale)) +
+        "." + QString::number(qAbs(fraction)).rightJustified(places, '0');
 }
-
-QString money(int64_t value) { return fixedText(value, 100, 2); }
 
 QString quantityText(int64_t value, Unit unit)
 {
@@ -107,7 +112,6 @@ QString statusText(OrderStatus status)
     switch (status) {
     case OrderStatus::OnHold: return "On hold";
     case OrderStatus::Paid: return "Paid";
-    case OrderStatus::Archived: return "Archived";
     case OrderStatus::InProgress: return "In progress";
     }
     return {};
@@ -118,11 +122,6 @@ constexpr char cameraSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="vis
 <g id="Camera icon">
 <path id="Vector" d="M5.33333 9.33333H9.33333L11.3333 6.66667H20.6667L22.6667 9.33333H26.6667C27.3739 9.33333 28.0522 9.61428 28.5523 10.1144C29.0524 10.6145 29.3333 11.2928 29.3333 12V24C29.3333 24.7072 29.0524 25.3855 28.5523 25.8856C28.0522 26.3857 27.3739 26.6667 26.6667 26.6667H5.33333C4.62609 26.6667 3.94781 26.3857 3.44771 25.8856C2.94762 25.3855 2.66667 24.7072 2.66667 24V12C2.66667 11.2928 2.94762 10.6145 3.44771 10.1144C3.94781 9.61428 4.62609 9.33333 5.33333 9.33333Z" stroke-width="2" stroke="#777777"/>
 <path id="Vector_2" d="M20 17.3333C20 19.5425 18.2091 21.3333 16 21.3333C13.7909 21.3333 12 19.5425 12 17.3333C12 15.1242 13.7909 13.3333 16 13.3333C18.2091 13.3333 20 15.1242 20 17.3333Z" stroke-width="2" stroke="#777777"/>
-</g>
-</svg>)svg";
-constexpr char disclosureSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g id="Disclosure chevron">
-<path id="Vector" d="M4 6L8 10L12 6" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" stroke="#333333"/>
 </g>
 </svg>)svg";
 constexpr char closeSvg[] = R"svg(<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -251,25 +250,18 @@ void rule(QWidget* parent, int x, int y, int width, const char* color = "#e7e7e7
 
 QString formattedMoney(int64_t value)
 {
-    return QLocale(QLocale::English, QLocale::UnitedStates).toString(value / 100) + "." +
-           QString::number(value % 100).rightJustified(2, '0');
-}
-
-QString ordinaryQuantity(int64_t value)
-{
-    QString output = fixedText(value, 1000, 3);
-    while (output.endsWith('0')) output.chop(1);
-    if (output.endsWith('.')) output.chop(1);
-    return output;
+    return (value < 0 ? QString("−") : QString()) +
+           QLocale(QLocale::English, QLocale::UnitedStates).toString(qAbs(value / 100)) + "." +
+           QString::number(qAbs(value % 100)).rightJustified(2, '0');
 }
 
 QString unitName(Unit unit) { return unit == Unit::Count ? "Count" : "Weight (kg)"; }
 QString unitShort(Unit unit) { return unit == Unit::Count ? "item" : "kg"; }
 
-QString availability(const Product& product)
+QString availability(const ProductStock& item)
 {
-    return quantityText(product.available, product.unit) +
-        (product.unit == Unit::Weight ? " kg" : product.available == 1000 ? " item" : " items");
+    return quantityText(item.stock.available, item.product.unit) +
+        (item.product.unit == Unit::Weight ? " kg" : item.stock.available == 1000 ? " item" : " items");
 }
 
 QString dateText(const Timestamp& time)
@@ -660,38 +652,6 @@ private:
     QImage frame_;
 };
 
-class BarcodeDisplay final {
-public:
-    BarcodeDisplay(QWidget* parent, int x, int y)
-    {
-        bars_ = label(parent, {x, y, 242, 80}, {}, 14, detailInk, QFont::Normal, Qt::AlignCenter);
-        digits_ = label(parent, {x, y + 86, 242, 17}, {}, 14, detailInk, QFont::Normal, Qt::AlignCenter);
-    }
-
-    void set(const QImage& image, const QString& barcode = {})
-    {
-        if (image.isNull()) {
-            bars_->clear();
-            digits_->clear();
-            return;
-        }
-        // Managed PNGs use the renderer's fixed top margin and bar height.
-        const auto bars = image.width() == CODED_STRING_LENGTH * MODULE_WIDTH &&
-                          image.height() >= TOP_MARGIN + BARCODE_HEIGHT
-            ? image.copy(0, TOP_MARGIN, image.width(), BARCODE_HEIGHT) : image;
-        const qreal density = bars_->devicePixelRatioF();
-        QPixmap pixels = QPixmap::fromImage(bars.scaled(bars_->size() * density, Qt::IgnoreAspectRatio,
-                                                       Qt::FastTransformation));
-        pixels.setDevicePixelRatio(density);
-        bars_->setPixmap(pixels);
-        digits_->setText(barcode);
-    }
-
-private:
-    QLabel* bars_ = nullptr;
-    QLabel* digits_ = nullptr;
-};
-
 class PaymentFields final {
 public:
     PaymentFields(QWidget* parent, int x, int y, int width, int gap, int merchantWidth,
@@ -714,11 +674,11 @@ public:
     {
         const auto parsed = fixedInput(amount->text(), 2);
         if (!parsed.success) return {false, "Payment amount: " + parsed.message, {}};
-        return {true, {}, {true, parsed.value, static_cast<PaymentMode>(mode->currentData().toInt()),
+        return {true, {}, {true, parsed.value, 0, static_cast<PaymentMode>(mode->currentData().toInt()),
                             merchant->text().trimmed().toStdString()}};
     }
 
-    void setAmount(int64_t money) { if (!amount->hasFocus()) amount->setText(formattedMoney(money)); }
+    void setAmount(int64_t money) { if (!amountEdited_ && !amount->hasFocus()) amount->setText(formattedMoney(money)); }
     void clearAmount() { if (!amount->hasFocus()) amount->clear(); }
     bool hasDraft() const { return amountEdited_ || !merchant->text().isEmpty() || mode->currentIndex() != 0; }
 
@@ -748,7 +708,7 @@ public:
         setStyleSheet("QWidget#quantityStepper {background:white; border:1px solid #dadada; border-radius:8px;}");
         const int buttonWidth = 36;
         const int fieldWidth = bounds.width() - 2 * buttonWidth;
-        const auto stepButton = [this, buttonWidth, bounds](const QString& title, int x) {
+        const auto stepButton = [this, bounds](const QString& title, int x) {
             auto* widget = action(this, {x, 1, buttonWidth, bounds.height() - 2}, title, Action::Text);
             widget->setFont(interfaceFont(17));
             widget->setStyleSheet(
@@ -871,7 +831,7 @@ public:
         const QStringList values{"—", "—", "In progress"};
         for (int i = 0; i < captions.size(); ++i) {
             label(order, {28 + 172 * i, 100, 150, 14}, captions[i], 12, muted);
-            label(order, {28 + 172 * i, 120, 150, 17}, values[i]);
+            orderIdentity_[i] = label(order, {28 + 172 * i, 120, 150, 17}, values[i]);
         }
         label(order, {574, 92, 380, 14}, "Customer name", 12, muted);
         name_ = edit(order, {574, 113, 396, 38}, "Customer name", "Enter customer name", false, true);
@@ -893,15 +853,16 @@ public:
         billError_ = label(order, {28, 501, 942, 30}, {}, 14, muted);
         billError_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         billError_->setWordWrap(true);
-        rule(order, 28, 621, 942, "#e3e3e3");
-        const QStringList totals{"Subtotal (before tax & discounts)", "Total tax", "Total discount"};
+        rule(order, 28, 612, 942, "#e3e3e3");
+        const QStringList totals{"Subtotal (before tax & discounts)", "Product discounts",
+                                 "Seasonal discount", "Special discount", "Tax", "Rounding"};
         for (int i = 0; i < totals.size(); ++i) {
-            label(order, {28, 642 + i * 27, 480, 17}, totals[i], 14, muted);
-            totals_[i] = label(order, {760, 642 + i * 27, 210, 17}, {}, 14, ink, QFont::Normal, right_);
+            label(order, {28, 621 + i * 20, 480, 17}, totals[i], 14, muted);
+            totals_[i] = label(order, {760, 621 + i * 20, 210, 17}, {}, 14, ink, QFont::Normal, right_);
         }
-        rule(order, 28, 731, 942, "#e3e3e3");
+        rule(order, 28, 746, 942, "#e3e3e3");
         label(order, {28, 753, 220, 24}, "Total payable", 20, ink, QFont::DemiBold);
-        totals_[3] = label(order, {650, 753, 320, 24}, {}, 20, ink, QFont::Bold, right_);
+        totals_[6] = label(order, {650, 753, 320, 24}, {}, 20, ink, QFont::Bold, right_);
         pay_ = action(order, {28, 801, 455, 44}, "Generate Bill", Action::Checkout);
         hold_ = action(order, {515, 801, 455, 44}, "Put on Hold", Action::Hold);
 
@@ -922,15 +883,21 @@ public:
         productName_->setWordWrap(true);
         productPriceLabel_ = label(product, {24, 110, 215, 17}, "Price / item (excl. tax)", 14, muted);
         productPrice_ = label(product, {260, 110, 196, 17}, "—", 14, ink, QFont::Medium, right_);
-        label(product, {24, 156, 432, 22}, "Product details", 16, ink, QFont::DemiBold);
+        auto* description = action(product, {24, 205, 432, 38}, "Description  ▾", Action::Secondary);
+        description->setCheckable(true);
+        description->setChecked(true);
+        auto* details = new QWidget(product);
+        details->setGeometry(24, 250, 432, 242);
+        connect(description, &QPushButton::toggled, details, &QWidget::setVisible);
         const QStringList detailLabels{"Product ID", "Acronym", "Barcode", "Measurement unit",
-                                       "Available stock", "Unit price", "Tax per unit", "Discount per unit"};
+                                       "Available stock", "Unit price", "Tax rate", "Product discount"};
         for (int i = 0; i < detailLabels.size(); ++i) {
-            const int y = 190 + i * 36;
-            label(product, {24, y, 175, 20}, detailLabels[i], 14, muted);
-            detailValues_[i] = label(product, {202, y, 254, 20}, "—", 14, ink, QFont::Medium, right_);
+            const int y = 3 + i * 30;
+            label(details, {0, y, 175, 20}, detailLabels[i], 14, muted);
+            detailValues_[i] = label(details, {178, y, 254, 20}, "—", 14, ink, QFont::Medium, right_);
         }
-        cartError_ = label(product, {24, 479, 432, 39}, {}, 13, errorInk);
+        stockSummary_ = label(product, {24, 143, 432, 19}, {}, 14, ink, QFont::DemiBold);
+        cartError_ = label(product, {24, 164, 432, 38}, {}, 13, errorInk);
         cartError_->setWordWrap(true);
         productPriceLabel_->hide();
         productPrice_->hide();
@@ -980,16 +947,18 @@ public:
         }
     }
 
-    void showScannedProduct(const Product& product) override
+    void showScannedProduct(const ProductStock& item) override
     {
+        const auto& product = item.product;
+        stockSummary_->setText("Available stock   " + availability(item));
         productName_->setText(text(product.name));
         productName_->setToolTip(text(product.name));
         productPriceLabel_->setText("Price / " + unitShort(product.unit) + " (excl. tax)");
         productPrice_->setText("PKR " + formattedMoney(product.unitPrice));
         const QStringList details{text(product.id), text(product.acronym), text(product.barcode),
-                                  unitName(product.unit), availability(product),
+                                  unitName(product.unit), availability(item),
                                   "PKR " + formattedMoney(product.unitPrice) + " / " + unitShort(product.unit),
-                                  "PKR " + formattedMoney(product.taxPerUnit),
+                                  fixedText(product.taxRate, 100, 2) + "%",
                                   "PKR " + formattedMoney(product.discountPerUnit)};
         for (int i = 0; i < details.size(); ++i) {
             detailValues_[i]->setText(details[i]);
@@ -1042,8 +1011,8 @@ public:
                 drafts_.erase(id);
                 window_.cancelPendingQuantity(id);
             };
-            stepper->changed = [this, id = product.id](int64_t value) {
-                drafts_.erase(id);
+            stepper->changed = [this, id = product.id, stepper](int64_t value) {
+                drafts_[id] = stepper->draft();
                 window_.onCartQuantityChanged(id, value);
             };
             stepper->invalid = [this](const string& message) { showCartError(message); };
@@ -1073,9 +1042,12 @@ public:
             .arg(" · " + QString::number(static_cast<double>(kilograms), 'f', 3) + " kg"));
         const Totals displayed = totals.value_or(Totals{});
         totals_[0]->setText(totals ? formattedMoney(displayed.subtotal) : "—");
-        totals_[1]->setText(totals ? formattedMoney(displayed.tax) : "—");
-        totals_[2]->setText(totals ? formattedMoney(displayed.discount) : "—");
-        totals_[3]->setText(totals ? "PKR " + formattedMoney(displayed.payable) : "—");
+        totals_[1]->setText(totals ? formattedMoney(displayed.productDiscount) : "—");
+        totals_[2]->setText(totals ? formattedMoney(displayed.seasonalDiscount) : "—");
+        totals_[3]->setText(totals ? formattedMoney(displayed.specialDiscount) : "—");
+        totals_[4]->setText(totals ? formattedMoney(displayed.tax) : "—");
+        totals_[5]->setText(totals && displayed.roundingAdjustment ? formattedMoney(displayed.roundingAdjustment) : "—");
+        totals_[6]->setText(totals ? "PKR " + formattedMoney(displayed.payable) : "—");
         if (committedRows == 0) payment_->clearAmount();
         else if (totals) payment_->setAmount(displayed.payable);
         canBill_ = committedRows > 0 && totals.has_value();
@@ -1094,7 +1066,14 @@ public:
         rows_->ensureWidgetVisible(next->second);
         next->second->select();
     }
+    void clearQuantityDraft(const string& id) override { drafts_.erase(id); }
     void setCustomer(const Customer& c) override { name_->setText(text(c.name)); contact_->setText(text(c.contact)); }
+    void setCheckoutOrder(const SaleRecord* sale) override
+    {
+        orderIdentity_[0]->setText(sale ? text(sale->ids.billId) : "—");
+        orderIdentity_[1]->setText(sale ? text(sale->ids.orderId) : "—");
+        orderIdentity_[2]->setText(sale ? "Resumed from hold" : "In progress");
+    }
     bool hasDraft() const override { return !name_->text().isEmpty() || !contact_->text().isEmpty() || payment_->hasDraft() || !drafts_.empty(); }
     bool hasQuantityDraft() const override { return !drafts_.empty(); }
     void showCartError(const string& message) override { cartError_->setText(text(message)); }
@@ -1136,7 +1115,9 @@ private:
     std::array<QLabel*, 8> detailValues_{};
     QLabel* cartError_ = nullptr;
     QLabel* billError_ = nullptr;
-    std::array<QLabel*, 4> totals_{};
+    std::array<QLabel*, 7> totals_{};
+    std::array<QLabel*, 3> orderIdentity_{};
+    QLabel* stockSummary_ = nullptr;
     SvgIcon* cameraIcon_ = nullptr;
     QLineEdit* name_ = nullptr;
     QLineEdit* contact_ = nullptr;
@@ -1165,20 +1146,47 @@ QPushButton* selectableRow(QWidget* parent, QRect bounds, const QString& name, b
     return row;
 }
 
-void panelTitle(QWidget* parent, int x, const QString& title, const QString& subtitle)
+QString billStatus(const SaleRecord& bill)
 {
-    label(parent, {x, 23, 450, 24}, title, 20, detailInk, QFont::DemiBold);
-    label(parent, {x, 53, 530, 16}, subtitle, 13, detailMuted);
+    if (bill.archived) return "Archived";
+    if (bill.billChange == BillChange::CompleteRefund) return "Complete Refund";
+    if (bill.billChange == BillChange::Modified) return "Modified";
+    return statusText(bill.status);
+}
+
+QString paymentName(PaymentMode mode)
+{
+    switch (mode) {
+    case PaymentMode::Cash: return "Cash";
+    case PaymentMode::Card: return "Card";
+    case PaymentMode::Wallet: return "Wallet";
+    }
+    return {};
+}
+
+Timestamp currentTimestamp()
+{
+    const auto now = QDateTime::currentDateTime();
+    return {now.date().toString(Qt::ISODate).toStdString(),
+            now.time().toString("HH:mm:ss").toStdString(), now.toSecsSinceEpoch()};
+}
+
+bool paidEditEligible(const SaleRecord& order)
+{
+    if (order.archived || order.status != OrderStatus::Paid ||
+        order.billChange == BillChange::CompleteRefund || !order.paidAt) return false;
+    const auto now = QDateTime::currentSecsSinceEpoch();
+    return order.paidAt->epochSeconds >= 0 && now >= order.paidAt->epochSeconds &&
+           now - order.paidAt->epochSeconds <= 604800;
 }
 
 class HistoryPage final : public PosWindow::OrderHistoryView {
 public:
     explicit HistoryPage(PosWindow& window) : window_(window)
     {
-        label(this, {0, 6, 600, 33}, "Order History", 28, detailInk, QFont::DemiBold);
-        label(this, {0, 44, 600, 16}, "Past orders and saved bills", 13, detailMuted);
-        historyTab_ = action(this, {0, 64, 72, 32}, "History", Action::Text);
-        archivesTab_ = action(this, {99, 64, 81, 32}, "Archives", Action::Text);
+        label(this, {0, -1, 600, 43}, "Order History", 36, detailInk, QFont::Medium);
+        historyTab_ = action(this, {0, 61, 72, 32}, "History", Action::Text);
+        archivesTab_ = action(this, {99, 61, 81, 32}, "Archives", Action::Text);
         rule(this, 0, 103, 1502);
         tabUnderline_ = new QWidget(this);
         tabUnderline_->setStyleSheet("background:#252525; border-radius:1px;");
@@ -1190,33 +1198,43 @@ public:
         listTitle_ = label(list, {24, 23, 450, 24}, "Past orders", 20, detailInk, QFont::DemiBold);
         label(list, {24, 53, 530, 16}, "Select an order to view its saved bill", 13, detailMuted);
         rule(list, 24, 88, 602);
-        orders_ = viewport(list, {16, 105, 618, 695});
+        orders_ = viewport(list, {16, 105, 618, 707});
         auto* bill = panel(this, {674, 118, 828, 840});
-        bill_ = viewport(bill, {0, 0, 820, billViewportHeight});
-        error_ = label(bill, {28, 715, 772, 34}, {}, 14, detailMuted);
+        bill_ = viewport(bill, {0, 0, 820, 700});
+        error_ = label(bill, {28, 706, 772, 56}, {}, 14, errorInk);
+        error_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         error_->setWordWrap(true);
-        archive_ = action(bill, {28, 760, 120, 42}, "Archive", Action::Secondary, true);
-        pay_ = action(bill, {631, 760, 169, 42}, "Mark as Paid", Action::Primary);
-        connect(pay_, &QPushButton::clicked, &window, &PosWindow::onMarkPaidClicked);
-        connect(archive_, &QPushButton::clicked, &window, &PosWindow::onArchiveClicked);
+        archive_ = action(bill, {28, 773, 145, 42}, "Archive Order", Action::Secondary, true);
+        pdf_ = action(bill, {182, 773, 192, 42}, "Open Bill PDF", Action::Secondary);
+        resume_ = action(bill, {600, 773, 200, 42}, "Resume Order", Action::Primary);
+        correction_ = action(bill, {600, 773, 200, 42}, "Edit Paid Quantities", Action::Primary);
+        connect(resume_, &QPushButton::clicked, this, [this] {
+            if (order_) window_.onResumeOrder(order_->ids.orderId);
+        });
+        connect(correction_, &QPushButton::clicked, this, &HistoryPage::beginEdit);
+        connect(archive_, &QPushButton::clicked, this, [this] {
+            if (!order_) return;
+            const auto id = order_->ids.orderId;
+            if (order_->archived) window_.onUnarchiveOrder(id);
+            else window_.onArchiveOrder(id);
+        });
+        connect(pdf_, &QPushButton::clicked, this, [this] {
+            if (!order_) return;
+            if (canOpenPdf_) window_.onOpenPdf(order_->ids.orderId);
+            else window_.onGeneratePdf(order_->ids.orderId);
+        });
         setArchiveView(false);
         clearBill();
     }
 
-    Result<Payment> readPayment() const override
-    {
-        return payment_ ? payment_->read() : Result<Payment>{false, "Select a held bill.", {}};
-    }
-
     bool showingArchives() const override { return showingArchives_; }
+    void setCashierActions(bool cashier) { cashier_ = cashier; }
 
     void setArchiveView(bool archived) override
     {
         showingArchives_ = archived;
         markSelected(*historyTab_, !archived);
         markSelected(*archivesTab_, archived);
-        historyTab_->setFont(interfaceFont(14, archived ? QFont::Medium : QFont::DemiBold));
-        archivesTab_->setFont(interfaceFont(14, archived ? QFont::DemiBold : QFont::Medium));
         tabUnderline_->setGeometry(archived ? 99 : 0, 102, archived ? 63 : 54, 3);
         listTitle_->setText(archived ? "Archived orders" : "Past orders");
     }
@@ -1224,7 +1242,7 @@ public:
     void showError(const string& message) override
     {
         error_->setText(text(message));
-        bill_->setFixedHeight(message.empty() ? billViewportHeight : billViewportHeight - 20);
+        error_->setToolTip(text(message));
     }
 
     void showOrders(const vector<SaleRecord>& orders, const string& selectedId) override
@@ -1239,13 +1257,13 @@ public:
             auto* customer = label(row, {x, 37, 340, 19}, {}, 16, detailInk);
             const int height = wrapHeight(*customer, text(order.customer.name), 19);
             customer->setFixedHeight(height);
-            label(row, {x, 43 + height, 340, 16}, dateText(order.timestamp), 13, detailMuted);
-            label(row, {480, 16, 120, 14}, statusText(order.status), 12, detailMuted,
-                  QFont::Normal, alignRight);
+            label(row, {x, 43 + height, 340, 16}, dateText(order.paidAt.value_or(order.createdAt)), 13, detailMuted);
+            label(row, {408, 16, 192, 15}, billStatus(order), 13, detailMuted, QFont::Medium, alignRight);
             label(row, {382, 72, 218, 17}, "PKR " + formattedMoney(order.totals.payable), 14,
                   detailInk, QFont::DemiBold, alignRight);
             const int rowHeight = std::max(112, height + 75);
             row->resize(618, rowHeight);
+            row->setProperty("orderId", text(order.ids.orderId));
             connect(row, &QPushButton::clicked, this, [this, id = order.ids.orderId] {
                 window_.onOrderSelected(id);
                 if (auto* current = orders_->widget()) {
@@ -1253,7 +1271,6 @@ public:
                         markSelected(*child, child->property("orderId").toString() == text(id));
                 }
             });
-            row->setProperty("orderId", text(order.ids.orderId));
             y += rowHeight;
             if (&order != &orders.back()) {
                 rule(rows, 0, y + 6, 602);
@@ -1263,8 +1280,6 @@ public:
         if (orders.empty()) {
             label(rows, {32, 24, 540, 21}, showingArchives_ ? "No archived orders" : "No saved orders",
                   18, detailInk, QFont::DemiBold);
-            label(rows, {32, 58, 540, 36}, showingArchives_ ? "Archived orders appear here."
-                  : "Generate a bill in Current Order to see it here.", 14, detailMuted);
             y = 100;
         }
         finishRows(*orders_, *rows, y);
@@ -1272,115 +1287,210 @@ public:
 
     void showBill(const SaleRecord& order) override
     {
-        payment_.reset();
+        order_ = order;
+        resetEditor();
         auto* content = newRows(*bill_, 820);
-        const bool held = order.status == OrderStatus::OnHold;
-        const auto metadata = [content](int x, int y, int width, const QString& name, const QString& value) {
-            label(content, {x, y, width, 14}, name, 12, detailMuted);
-            auto* field = label(content, {x, y + 18, width, 17}, value, 14, detailInk);
-            field->setToolTip(value);
-            return field;
-        };
-        label(content, {28, 23, 500, 24}, "Saved bill", 20, detailInk, QFont::DemiBold);
-        label(content, {680, 27, 120, 14}, statusText(order.status), 12, detailMuted,
-              QFont::Normal, alignRight);
-        metadata(28, 66, 174, "Bill ID", text(order.ids.billId));
-        metadata(224, 66, 174, "Order ID", text(order.ids.orderId));
-        metadata(420, 66, 344, "Date and time", dateText(order.timestamp));
-        rule(content, 28, 115, 772);
-        auto* customer = metadata(28, 130, 180, "Customer", text(order.customer.name));
-        const int customerHeight = wrapHeight(*customer, customer->text(), 17);
+        label(content, {28, 23, 500, 24}, "Saved Bill", 20, detailInk, QFont::DemiBold);
+        const bool changed = order.billChange != BillChange::Unchanged;
+        label(content, {552, 24, 248, 23}, billStatus(order), 14,
+              changed ? (order.billChange == BillChange::CompleteRefund ? errorInk : "#806017") : detailMuted,
+              QFont::DemiBold, alignRight);
+        const QStringList names{"Bill ID", "Order ID", "Date and time"};
+        const QStringList values{text(order.ids.billId), text(order.ids.orderId), dateText(order.paidAt.value_or(order.createdAt))};
+        for (int i = 0; i < names.size(); ++i) {
+            const int x = 28 + 197 * i;
+            label(content, {x, 68, 190, 15}, names[i], 12, detailMuted);
+            label(content, {x, 88, i == 2 ? 366 : 183, 18}, values[i], 14, detailInk);
+        }
+        auto* customer = label(content, {28, 124, 772, 18}, {}, 14, detailInk);
+        const QString identity = order.customer.contact.empty() ? text(order.customer.name) :
+            text(order.customer.name) + "   ·   " + text(order.customer.contact);
+        const int customerHeight = wrapHeight(*customer, identity, 18);
         customer->setFixedHeight(customerHeight);
-        auto* contact = metadata(224, 130, 535, "Contact",
-            order.customer.contact.empty() ? "—" : text(order.customer.contact));
-        const int contactHeight = wrapHeight(*contact, contact->text(), 17);
-        contact->setFixedHeight(contactHeight);
-        int y = 181 + std::max(customerHeight, contactHeight) - 17;
+        int y = 142 + customerHeight;
         rule(content, 28, y, 772);
-        const QRect acronymColumn(28, 0, 268, 17);
-        const QRect priceColumn(300, 0, 150, 17);
-        const QRect discountColumn(470, 0, 155, 17);
-        const QRect quantityColumn(643, 0, 157, 17);
-        label(content, acronymColumn.translated(0, y + 16), "Acronym", 13, detailInk, QFont::Medium);
-        label(content, priceColumn.translated(0, y + 16), "Unit price", 13, detailInk, QFont::Medium, alignRight);
-        label(content, priceColumn.translated(0, y + 32), "(excl. tax)", 11, detailMuted, QFont::Normal, alignRight);
-        label(content, discountColumn.translated(0, y + 16), "Discount / unit", 13, detailInk, QFont::Medium, alignRight);
-        label(content, quantityColumn.translated(0, y + 16), "Qty", 13, detailInk, QFont::Medium, alignRight);
-        y += 66;
-        for (const SaleLine& line : order.lines) {
-            label(content, acronymColumn.translated(0, y), text(line.acronym), 12, detailMuted);
-            label(content, priceColumn.translated(0, y), formattedMoney(line.unitPrice), 14,
-                  detailInk, QFont::Normal, alignRight);
-            label(content, discountColumn.translated(0, y), formattedMoney(line.discountPerUnit), 14,
-                  detailInk, QFont::Normal, alignRight);
-            label(content, quantityColumn.translated(0, y), ordinaryQuantity(line.quantity), 14,
-                  detailInk, QFont::Normal, alignRight);
-            y += 55;
+        const array<QRect, 5> columns{QRect(28, 0, 244, 18), QRect(278, 0, 128, 18),
+            QRect(410, 0, 125, 18), QRect(540, 0, 124, 18), QRect(672, 0, 128, 18)};
+        const QStringList headings{"Product", "Unit price", "Quantity", "Product discount", "Line tax"};
+        for (int i = 0; i < headings.size(); ++i) {
+            label(content, columns[i].translated(0, y + 14), headings[i], 12, detailMuted,
+                  QFont::Medium, i == 0 ? Qt::AlignLeft | Qt::AlignVCenter : alignRight);
         }
-        y += 4;
-        rule(content, 28, y, 772);
-        const QStringList captions{"Subtotal before tax & discount", "Total tax", "Total discount"};
-        const std::array<int64_t, 3> figures{order.totals.subtotal, order.totals.tax, order.totals.discount};
-        for (int i = 0; i < 3; ++i) {
-            label(content, {445, y + 15 + i * 25, 190, 16}, captions[i], 13, detailMuted);
-            label(content, {638, y + 15 + i * 25, 162, 16}, formattedMoney(figures[i]), 13,
-                  detailInk, QFont::Normal, alignRight);
+        y += 48;
+        for (const auto& line : order.lines) {
+            auto* identityLabel = label(content, columns[0].translated(0, y), {}, 13, detailInk);
+            const auto printable = text(line.name) + " · " + text(line.acronym);
+            const int height = wrapHeight(*identityLabel, printable, 18);
+            identityLabel->setFixedHeight(height);
+            const QStringList row{formattedMoney(line.unitPrice),
+                quantityText(line.quantity, line.unit) + " " + unitShort(line.unit),
+                formattedMoney(line.lineProductDiscount), formattedMoney(line.lineTax)};
+            for (int i = 0; i < row.size(); ++i) {
+                label(content, columns[i + 1].translated(0, y), row[i], 13, detailInk, QFont::Normal, alignRight);
+            }
+            auto* rates = label(content, {28, y + height + 3, 650, 15},
+                "Tax " + fixedText(line.taxRate, 100, 2) + "%   ·   Discount per unit PKR " +
+                formattedMoney(line.discountPerUnit), 11, detailMuted);
+            rates->setToolTip(text(line.barcode));
+            y += height + 31;
         }
-        rule(content, 445, y + 91, 355);
-        label(content, {445, y + 103, 170, 19}, "Total payable", 16, detailInk, QFont::DemiBold);
-        label(content, {620, y + 103, 180, 19}, "PKR " + formattedMoney(order.totals.payable), 16,
-              detailInk, QFont::Bold, alignRight);
-        y += 139;
         rule(content, 28, y, 772);
-        if (held) {
-            label(content, {28, y + 19, 400, 21}, "Record payment", 18, detailInk, QFont::DemiBold);
-            label(content, {28, y + 46, 772, 16},
-                  "No payment recorded. Enter payment details to mark this order as paid.", 13, detailMuted);
-            payment_ = std::make_unique<PaymentFields>(content, 28, y + 83, 230, 18, 276, "Merchant");
-            payment_->setAmount(order.totals.payable);
-            label(content, {276, y + 153, 230, 14}, "Cash / Card / Wallet", 12, detailMuted);
-            label(content, {28, y + 189, 772, 14}, "Payment details are a draft until marked as paid.",
-                  12, detailMuted);
-            y += 211;
-        } else if (order.payment.recorded) {
-            label(content, {28, y + 19, 450, 21}, "Payment recorded", 18, detailInk, QFont::DemiBold);
-            label(content, {28, y + 46, 772, 16}, "Saved payment details", 13, detailMuted);
-            const QString mode = order.payment.mode == PaymentMode::Cash ? "Cash" :
-                order.payment.mode == PaymentMode::Card ? "Card" : "Wallet";
-            field(content, 28, y + 83, 230, "Payment amount (PKR)",
-                  formattedMoney(order.payment.amount), true);
-            field(content, 276, y + 83, 230, "Payment mode", mode, true);
-            field(content, 524, y + 83, 276, "Merchant",
-                  order.payment.merchant.empty() ? "—" : text(order.payment.merchant), true);
-            label(content, {28, y + 189, 772, 14}, "Payment is read only.", 12, detailMuted);
-            y += 211;
+        y += 12;
+        const auto& totals = order.totals;
+        const QStringList captions{"Subtotal", "Product discounts",
+            "Seasonal discount (" + fixedText(order.terms.seasonalRate, 100, 2) + "%)",
+            "Special discount (" + fixedText(order.terms.specialRate, 100, 2) + "%)",
+            "Tax", "Rounding", "Total payable"};
+        const array<int64_t, 7> figures{totals.subtotal, totals.productDiscount, totals.seasonalDiscount,
+            totals.specialDiscount, totals.tax, totals.roundingAdjustment, totals.payable};
+        for (size_t i = 0; i < figures.size(); ++i) {
+            if (i == 5 && !figures[i]) continue;
+            const bool total = i == figures.size() - 1;
+            label(content, {420, y, 235, 20}, captions[static_cast<int>(i)], total ? 16 : 13,
+                  total ? detailInk : detailMuted, total ? QFont::DemiBold : QFont::Normal);
+            label(content, {650, y, 150, 20}, "PKR " + formattedMoney(figures[i]), total ? 16 : 13,
+                  detailInk, total ? QFont::DemiBold : QFont::Normal, alignRight);
+            y += total ? 35 : 23;
+        }
+        rule(content, 28, y, 772);
+        y += 18;
+        if (order.payment.recorded) {
+            const auto& payment = order.payment;
+            label(content, {28, y, 720, 23}, "Payment recorded", 16, detailInk, QFont::DemiBold);
+            y += 28;
+            const auto tender = paymentName(payment.mode) + "  ·  Received PKR " +
+                formattedMoney(payment.amountReceived) + "  ·  Change PKR " + formattedMoney(payment.changeReturned);
+            const QString merchant = payment.merchant.empty() ? QString() : "  ·  " + text(payment.merchant);
+            auto* detail = label(content, {28, y, 772, 18}, {}, 13, detailMuted);
+            const auto height = wrapHeight(*detail, tender + merchant, 18);
+            detail->setFixedHeight(height);
+            y += height + 13;
+            for (const auto& adjustment : order.adjustments) {
+                const QString direction = adjustment.amountDelta < 0 ? "Refund" :
+                    adjustment.amountDelta > 0 ? "Additional collection" : "No payment difference";
+                label(content, {28, y, 772, 18}, direction + "   ·   " + dateText(adjustment.at) +
+                    "   ·   PKR " + formattedMoney(adjustment.amountDelta), 13, detailInk);
+                y += 23;
+            }
+            if (!order.archived && order.billChange != BillChange::CompleteRefund && !paidEditEligible(order)) {
+                label(content, {28, y + 8, 772, 22}, "The seven-day paid-edit window has closed.", 13, detailMuted);
+                y += 34;
+            }
         } else {
-            label(content, {28, y + 19, 450, 21}, "No payment recorded", 18, detailInk, QFont::DemiBold);
-            label(content, {28, y + 46, 772, 16}, "This order was archived while on hold.", 13, detailMuted);
-            y += 82;
+            label(content, {28, y, 720, 24}, "Payment is pending", 15, detailInk, QFont::DemiBold);
+            y += 34;
         }
-        finishRows(*bill_, *content, y);
-        pay_->setVisible(held);
-        archive_->setVisible(!showingArchives_);
-        archive_->setEnabled(order.status != OrderStatus::Archived);
+        finishRows(*bill_, *content, y + 12);
+        archive_->setText(order.archived ? "Unarchive Order" : "Archive Order");
+        archive_->show();
+        archive_->setEnabled(archiveAvailable_);
+        resume_->setVisible(cashier_ && !order.archived && order.status == OrderStatus::OnHold);
+        correction_->setVisible(paidEditEligible(order));
     }
 
     void clearBill() override
     {
-        payment_.reset();
+        order_.reset();
+        resetEditor();
         auto* content = newRows(*bill_, 820);
-        label(content, {28, 23, 772, 24}, "Saved bill", 20, detailInk, QFont::DemiBold);
-        label(content, {52, 70, 724, 21}, "No order selected", 18, detailInk, QFont::DemiBold);
-        label(content, {52, 104, 724, 17}, "Select an order to view its saved bill.", 14, detailMuted);
+        label(content, {28, 23, 772, 24}, "Saved Bill", 20, detailInk, QFont::DemiBold);
+        label(content, {28, 70, 724, 21}, "No order selected", 18, detailInk, QFont::DemiBold);
+        label(content, {28, 104, 724, 17}, "Select an order to view its saved bill.", 14, detailMuted);
         finishRows(*bill_, *content, 180);
-        pay_->hide();
-        archive_->setVisible(!showingArchives_);
-        archive_->setEnabled(false);
+        archive_->hide();
+        resume_->hide();
+        correction_->hide();
+        pdf_->hide();
+    }
+
+    void showPaidEdit(const PaidEditDraft& draft) override
+    {
+        if (!summary_) return;
+        settledDelta_ = draft.amountDelta;
+        const QString direction = draft.amountDelta < 0 ? "Refund due" :
+            draft.amountDelta > 0 ? "Additional amount due" : "No money movement";
+        const bool full = order_ && std::all_of(order_->lines.begin(), order_->lines.end(),
+            [&draft](const SaleLine& line) {
+                const auto change = std::find_if(draft.changes.begin(), draft.changes.end(),
+                    [&line](const QuantityChange& entry) { return entry.productId == line.productId; });
+                return change == draft.changes.end() ? line.quantity == 0 : change->quantity == 0;
+            });
+        summary_->setText((full ? QString("Complete Refund\n") : QString()) +
+            "Current payable  PKR " + formattedMoney(draft.before.payable) + "\nRevised payable  PKR " +
+            formattedMoney(draft.after.payable) + "\n" + direction + "  PKR " +
+            formattedMoney(qAbs(draft.amountDelta)) + "  ·  " + paymentName(order_->payment.mode));
+        previewValid_ = true;
+        synchronizeEditor();
+    }
+
+    void clearPaidEditApproval() override
+    {
+        previewValid_ = false;
+        approved_ = false;
+        if (summary_) summary_->clear();
+        if (pin_) pin_->clear();
+        synchronizeEditor();
+    }
+
+    void setPaidEditBusy(bool busy) override
+    {
+        editBusy_ = busy;
+        synchronizeEditor();
+    }
+
+    void setPaidEditApproved(bool approved) override
+    {
+        approved_ = approved;
+        if (pin_) pin_->clear();
+        synchronizeEditor();
+    }
+
+    void setPdfActions(bool canGenerate, bool canOpen) override
+    {
+        canOpenPdf_ = canOpen;
+        pdf_->setText(canOpen ? "Open Bill PDF" : "Generate Bill PDF");
+        pdf_->setVisible(!editing_ && (canOpen || canGenerate));
+    }
+
+    void setArchiveActionsAvailable(bool available) override
+    {
+        archiveAvailable_ = available;
+        archive_->setEnabled(available);
+    }
+
+    void showUnarchiveShortages(const vector<StockShortage>& shortages) override
+    {
+        if (!order_ || shortages.empty()) return;
+        auto* content = newRows(*bill_, 820);
+        auto* layout = new QVBoxLayout(content);
+        layout->setContentsMargins(28, 22, 20, 22);
+        auto* title = new QLabel("Order cannot be restored");
+        title->setFont(interfaceFont(20, QFont::DemiBold));
+        layout->addWidget(title);
+        for (const auto& shortage : shortages) {
+            auto* row = new QLabel(text(shortage.name) + "   ·   Required " +
+                quantityText(shortage.required, shortage.unit) + " " + unitShort(shortage.unit) +
+                "   ·   Available " + quantityText(shortage.available, shortage.unit) + " " + unitShort(shortage.unit));
+            row->setTextFormat(Qt::PlainText);
+            row->setWordWrap(true);
+            row->setStyleSheet("color:#a22922;");
+            layout->addWidget(row);
+        }
+        layout->addStretch();
+        finishRows(*bill_, *content, std::max(200, layout->sizeHint().height()));
+        showError("The order remains archived.");
     }
 
 private:
-    static constexpr int billViewportHeight = 735;
+    struct EditRow {
+        SaleLine line;
+        QLineEdit* quantity = nullptr;
+        QLineEdit* restock = nullptr;
+    };
+
     PosWindow& window_;
+    optional<SaleRecord> order_;
+    vector<EditRow> editRows_;
     QPushButton* historyTab_ = nullptr;
     QPushButton* archivesTab_ = nullptr;
     QWidget* tabUnderline_ = nullptr;
@@ -1389,407 +1499,160 @@ private:
     QScrollArea* bill_ = nullptr;
     QLabel* error_ = nullptr;
     QPushButton* archive_ = nullptr;
-    QPushButton* pay_ = nullptr;
-    std::unique_ptr<PaymentFields> payment_;
-    bool showingArchives_ = false;
-};
-
-class ProductFields final {
-public:
-    ProductFields(QWidget* parent, bool editing)
-    {
-        if (editing) {
-            id = field(parent, 28, 104, 240, "Product ID", {}, true);
-            barcode = field(parent, 294, 104, 240, "Barcode value", {}, true);
-            acronym = field(parent, 560, 104, 240, "Acronym (max 8 characters)");
-            label(parent, {294, 172, 240, 13}, "Existing barcode value is read-only", 11, detailMuted);
-            name = field(parent, 28, 201, 372, "Product name");
-            makeUnit(parent, 428, 201, 372);
-            price = field(parent, 28, 283, 240, "Price / item (excl. tax)", {}, false, &priceCaption);
-            tax = field(parent, 294, 283, 240, "Tax per unit (PKR)", "0.00");
-            discount = field(parent, 560, 283, 240, "Discount per unit (PKR)", "0.00");
-            stock = field(parent, 28, 365, 240, "Available quantity (items)", {}, false, &quantityCaption);
-        } else {
-            id = field(parent, 28, 105, 282, "Product ID", "Assigned on save", true);
-            barcode = field(parent, 340, 105, 282, "Barcode value");
-            barcode->setMaxLength(6);
-            label(parent, {340, 170, 282, 13}, "Unique 6 digits, first digit non-zero", 11, detailMuted);
-            acronym = field(parent, 28, 203, 282, "Acronym (max 8 characters)");
-            name = field(parent, 340, 203, 282, "Product name");
-            makeUnit(parent, 28, 291, 282);
-            stock = field(parent, 340, 291, 282, "Available quantity (items)", {}, false, &quantityCaption);
-            price = field(parent, 28, 379, 282, "Price / item (excl. tax)", {}, false, &priceCaption);
-            tax = field(parent, 340, 379, 282, "Tax per unit (PKR)", "0.00");
-            discount = field(parent, 28, 467, 282, "Discount per unit (PKR)", "0.00");
-        }
-        countValidator = new QRegularExpressionValidator(quantityPattern(Unit::Count), stock);
-        weightValidator = new QRegularExpressionValidator(quantityPattern(Unit::Weight), stock);
-        stock->setValidator(countValidator);
-        QObject::connect(stock, &QLineEdit::textChanged, stock, [this] {
-            if (currentUnit() == Unit::Count && stock->validator() == weightValidator &&
-                !stock->text().contains('.')) {
-                stock->setValidator(countValidator);
-                stock->setToolTip({});
-                updateLabels();
-            }
-        });
-        QObject::connect(unit, &QComboBox::currentIndexChanged, unit, [this] {
-            if (currentUnit() == Unit::Count) {
-                const auto draft = quantityInput(stock->text(), Unit::Weight);
-                if (stock->text().contains('.') && draft.success && draft.value % 1000 == 0)
-                    stock->setText(quantityText(draft.value, Unit::Count));
-                if (stock->text().contains('.')) {
-                    // Keep the draft editable until the fraction is removed or replaced.
-                    stock->setValidator(weightValidator);
-                    stock->setToolTip("Count requires whole items; replace the fractional stock quantity.");
-                } else {
-                    stock->setValidator(countValidator);
-                    stock->setToolTip({});
-                }
-            } else {
-                stock->setValidator(weightValidator);
-                stock->setToolTip({});
-            }
-            updateLabels();
-        });
-        updateLabels();
-    }
-
-    Result<Product> read() const
-    {
-        Product product;
-        product.barcode = barcode->text().trimmed().toStdString();
-        product.acronym = acronym->text().trimmed().toStdString();
-        product.name = name->text().trimmed().toStdString();
-        product.unit = currentUnit();
-        const auto unitPrice = fixedInput(price->text(), 2);
-        const auto unitTax = fixedInput(tax->text(), 2);
-        const auto unitDiscount = fixedInput(discount->text(), 2);
-        const auto quantity = quantityInput(stock->text(), product.unit);
-        if (!unitPrice.success) return {false, "Unit price: " + unitPrice.message, {}};
-        if (!unitTax.success) return {false, "Tax: " + unitTax.message, {}};
-        if (!unitDiscount.success) return {false, "Discount: " + unitDiscount.message, {}};
-        if (!quantity.success) return {false, "Stock: " + quantity.message, {}};
-        product.unitPrice = unitPrice.value;
-        product.taxPerUnit = unitTax.value;
-        product.discountPerUnit = unitDiscount.value;
-        product.available = quantity.value;
-        return {true, {}, product};
-    }
-
-    void show(const Product& product)
-    {
-        id->setText(text(product.id));
-        barcode->setText(text(product.barcode));
-        acronym->setText(text(product.acronym));
-        name->setText(text(product.name));
-        unit->setCurrentIndex(unit->findData(static_cast<int>(product.unit)));
-        price->setText(money(product.unitPrice));
-        tax->setText(money(product.taxPerUnit));
-        discount->setText(money(product.discountPerUnit));
-        stock->setText(quantityText(product.available, product.unit));
-    }
-
-    QLineEdit* id = nullptr;
-    QLineEdit* barcode = nullptr;
-    QComboBox* unit = nullptr;
-
-private:
-    void makeUnit(QWidget* parent, int x, int y, int width)
-    {
-        label(parent, {x, y, width, 16}, "Measurement unit", 13, detailInk);
-        unit = selector(parent, {x, y + 21, width, 39}, "Measurement unit");
-        unit->addItem("Count", static_cast<int>(Unit::Count));
-        unit->addItem("Weight (kg)", static_cast<int>(Unit::Weight));
-    }
-
-    Unit currentUnit() const { return static_cast<Unit>(unit->currentData().toInt()); }
-
-    void updateLabels()
-    {
-        const Unit selectedUnit = currentUnit();
-        const QString priceLabel = "Price / " + unitShort(selectedUnit) + " (excl. tax)";
-        const QString quantityLabel = selectedUnit == Unit::Count
-            ? (stock->text().contains('.') ? "Stock (items): remove fraction" : "Available quantity (items)")
-            : "Available quantity (kg)";
-        priceCaption->setText(priceLabel);
-        price->setAccessibleName(priceLabel);
-        if (quantityCaption)
-            quantityCaption->setText(quantityLabel);
-        stock->setAccessibleName(quantityLabel);
-    }
-
-    QLineEdit* acronym = nullptr;
-    QLineEdit* name = nullptr;
-    QLineEdit* price = nullptr;
-    QLineEdit* tax = nullptr;
-    QLineEdit* discount = nullptr;
-    QLineEdit* stock = nullptr;
-    QLabel* priceCaption = nullptr;
-    QLabel* quantityCaption = nullptr;
-    QRegularExpressionValidator* countValidator = nullptr;
-    QRegularExpressionValidator* weightValidator = nullptr;
-};
-
-class CatalogueTabs final : public QTabWidget {
-public:
-    explicit CatalogueTabs(QWidget* parent) : QTabWidget(parent)
-    {
-        setDocumentMode(true);
-        tabBar()->hide();
-        setStyleSheet("QTabWidget::pane {border:none; background:transparent; margin:0; padding:0;}");
-    }
-};
-
-class CataloguePage final : public PosWindow::CatalogueView {
-public:
-    explicit CataloguePage(PosWindow& window) : window_(window)
-    {
-        label(this, {0, 6, 650, 33}, "Product Catalogue", 28, detailInk, QFont::DemiBold);
-        rule(this, 0, 103, 1502);
-        viewTab_ = action(this, {3, 59, 120, 32}, "View Catalogue", Action::Text);
-        addTab_ = action(this, {171, 59, 96, 32}, "Add Product", Action::Text);
-        indicator_ = new QWidget(this);
-        indicator_->setStyleSheet("background:#252525;border-radius:1px;");
-        tabs_ = new CatalogueTabs(this);
-        tabs_->setGeometry(0, 124, 1502, 834);
-        auto* view = new QWidget;
-        auto* add = new QWidget;
-        tabs_->addTab(view, "View Catalogue");
-        tabs_->addTab(add, "Add Product");
-        tabs_->tabBar()->hide();
-        connect(viewTab_, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(0); });
-        connect(addTab_, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(1); });
-        connect(tabs_, &QTabWidget::currentChanged, this, [this](int index) {
-            updateTabs(index);
-            showError({});
-        });
-        updateTabs(0);
-
-        auto* list = panel(view, {0, 0, 650, 834});
-        panelTitle(list, 24, "Products", "Select a product to view and edit its details");
-        auto* createLink = action(list, {486, 20, 140, 42}, "Add Product", Action::Primary);
-        connect(createLink, &QPushButton::clicked, this, [this] { tabs_->setCurrentIndex(1); });
-        rule(list, 24, 88, 602);
-        label(list, {32, 105, 280, 16}, "Product", 13, detailMuted, QFont::Medium);
-        label(list, {346, 105, 100, 16}, "Available", 13, detailMuted, QFont::Medium, alignRight);
-        label(list, {486, 105, 132, 16}, "Unit price", 13, detailMuted, QFont::Medium, alignRight);
-        products_ = viewport(list, {16, 137, 618, 650});
-
-        details_ = panel(view, {674, 0, 828, 834});
-        panelTitle(details_, 28, "Product details", "Edit product details and available quantity");
-        status_ = label(details_, {680, 26, 120, 14}, {}, 12, detailMuted, QFont::Normal, alignRight);
-        rule(details_, 28, 84, 772);
-        edit_ = std::make_unique<ProductFields>(details_, true);
-        stockHint_ = label(details_, {294, 389, 505, 17}, {}, 12, detailMuted);
-        rule(details_, 28, 449, 772);
-        label(details_, {28, 466, 220, 18}, "Barcode image", 15, detailInk, QFont::DemiBold);
-        savedImage_ = std::make_unique<BarcodeDisplay>(details_, 28, 496);
-        info_ = viewport(details_, {316, 491, 456, 166});
-        rule(details_, 28, 716, 772);
-        editError_ = label(details_, {28, 665, 772, 42}, {}, 14, detailMuted);
-        editError_->setWordWrap(true);
-        remove_ = action(details_, {28, 750, 150, 42}, "Delete Product", Action::Secondary, true);
-        cancel_ = action(details_, {513, 750, 112, 42}, "Cancel", Action::Secondary, true);
-        update_ = action(details_, {637, 750, 163, 42}, "Save Changes", Action::Primary);
-        connect(cancel_, &QPushButton::clicked, this, [this] {
-            if (selected_) {
-                edit_->show(*selected_);
-                showError({});
-            }
-        });
-        connect(update_, &QPushButton::clicked, &window, &PosWindow::onUpdateProduct);
-        connect(remove_, &QPushButton::clicked, &window, &PosWindow::onDeleteProduct);
-        noProduct_ = label(details_, {28, 23, 772, 30},
-                           "Select a product to view its details.", 14, detailMuted);
-
-        auto* form = panel(add, {0, 0, 650, 834});
-        panelTitle(form, 28, "Add product", "Enter product details and generate its barcode");
-        rule(form, 28, 84, 594);
-        create_ = std::make_unique<ProductFields>(form, false);
-        rule(form, 28, 694, 594);
-        addError_ = label(form, {28, 640, 594, 46}, {}, 14, detailMuted);
-        addError_->setWordWrap(true);
-        auto* preview = action(form, {28, 733, 190, 42}, "Generate Barcode", Action::Secondary, true);
-        auto* save = action(form, {462, 733, 160, 42}, "Save Product", Action::Primary);
-        connect(preview, &QPushButton::clicked, &window, &PosWindow::onGeneratePreview);
-        connect(save, &QPushButton::clicked, &window, &PosWindow::onSaveProduct);
-
-        auto* draft = panel(add, {674, 0, 828, 834});
-        label(draft, {28, 24, 680, 24}, "Generated barcode", 20, detailInk, QFont::DemiBold);
-        draftStatus_ = label(draft, {28, 54, 772, 16}, "Enter a barcode and generate a preview.", 13, detailMuted);
-        rule(draft, 28, 84, 772);
-        barcodeFrame_ = surface(draft, {28, 111, 772, 258}, "#fafafa", "#e7e7e7", 12);
-        newImage_ = std::make_unique<BarcodeDisplay>(barcodeFrame_, 265, 65);
-        barcodeFrame_->hide();
-        draftInfo_ = viewport(draft, {28, 402, 772, 400});
-        showMetadata(*draftInfo_, 772, {}, true);
-        connect(create_->barcode, &QLineEdit::textEdited, this, [this] {
-            create_->id->setText("Assigned on save");
-            showBarcodePreview({});
-            showMetadata(*draftInfo_, 772, {}, true);
-        });
-        clearProduct();
-    }
-
-    QTabWidget& tabs() const { return *tabs_; }
-    string readBarcode() const override { return create_->barcode->text().trimmed().toStdString(); }
-    Result<Product> readNewProduct() const override { return create_->read(); }
-    Result<Product> readEditedProduct() const override { return edit_->read(); }
-
-    void showError(const string& message) override
-    {
-        (tabs_->currentIndex() == 0 ? editError_ : addError_)->setText(text(message));
-    }
-
-    void showProducts(const vector<Product>& products, const string& selectedId) override
-    {
-        auto* rows = newRows(*products_, 618);
-        int y = 0;
-        for (const Product& product : products) {
-            const bool selected = product.id == selectedId;
-            const int x = selected ? 17 : 16;
-            auto* row = selectableRow(rows, {0, y, 618, 105}, text(product.name), selected);
-            auto* name = label(row, {x, 15, 280, 18}, {}, 15, detailInk);
-            const int height = wrapHeight(*name, text(product.name), 18);
-            name->setFixedHeight(height);
-            label(row, {x, 21 + height, 280, 14}, text(product.acronym), 12, detailMuted);
-            if (product.available == 0)
-                label(row, {x, 47 + height, 200, 14}, "Out of stock", 12, detailMuted);
-            label(row, {330, 20, 100, 17}, availability(product), 14, detailInk, QFont::Medium, alignRight);
-            label(row, {456, 20, 146, 17}, "PKR " + formattedMoney(product.unitPrice), 14,
-                  detailInk, QFont::Medium, alignRight);
-            const int rowHeight = std::max(105, height + 68);
-            row->resize(618, rowHeight);
-            row->setProperty("productId", text(product.id));
-            connect(row, &QPushButton::clicked, this, [this, id = product.id] {
-                window_.onProductSelected(id);
-                if (auto* current = products_->widget()) {
-                    for (auto* child : current->findChildren<QPushButton*>(QString{}, Qt::FindDirectChildrenOnly))
-                        markSelected(*child, child->property("productId").toString() == text(id));
-                }
-            });
-            y += rowHeight;
-            if (&product != &products.back()) {
-                rule(rows, 16, y + 6, 586);
-                y += 13;
-            }
-        }
-        if (products.empty()) {
-            label(rows, {32, 24, 550, 21}, "No products yet", 18, detailInk, QFont::DemiBold);
-            label(rows, {32, 58, 550, 17}, "Use Add Product to create your first catalogue entry.", 14, detailMuted);
-            y = 100;
-        }
-        finishRows(*products_, *rows, y);
-    }
-
-    void showProduct(const Product& product) override
-    {
-        selected_ = product;
-        showProductDetails(true);
-        edit_->show(product);
-        details_->setEnabled(true);
-        status_->setText(product.available == 0 ? "Out of stock" : "");
-        setHeldReference(false);
-        const QDir root(QString::fromUtf8(EYERIS_PROJECT_DATA_DIR));
-        savedImage_->set(QImage(root.filePath(text(product.barcodeImagePath))), text(product.barcode));
-        showMetadata(*info_, 456, text(product.barcodeImagePath), false);
-    }
-
-    void setHeldReference(bool held) override
-    {
-        edit_->unit->setEnabled(selected_ && !held);
-        remove_->setEnabled(selected_ && !held);
-        stockHint_->setText(held ? "Referenced by an on-hold bill" : "");
-    }
-
-    void clearProduct() override
-    {
-        selected_.reset();
-        edit_->show({});
-        details_->setEnabled(false);
-        showProductDetails(false);
-        savedImage_->set({});
-        showMetadata(*info_, 456, {}, false);
-    }
-
-    void showBarcodePreview(const QImage& image) override
-    {
-        newImage_->set(image, text(readBarcode()));
-        barcodeFrame_->setVisible(!image.isNull());
-        draftStatus_->setText(image.isNull() ? "Enter a barcode and generate a preview."
-                                              : "Barcode generated · Product not saved");
-    }
-
-    void showSavedProduct(const Product& product) override
-    {
-        create_->id->setText(text(product.id));
-        const QDir root(QString::fromUtf8(EYERIS_PROJECT_DATA_DIR));
-        const QImage barcode(root.filePath(text(product.barcodeImagePath)));
-        if (!barcode.isNull()) {
-            newImage_->set(barcode, text(product.barcode));
-            barcodeFrame_->show();
-        }
-        draftStatus_->setText("Product saved · Product ID " + text(product.id));
-        showMetadata(*draftInfo_, 772, text(product.barcodeImagePath), true);
-    }
-
-private:
-    void showProductDetails(bool visible)
-    {
-        for (auto* widget : details_->findChildren<QWidget*>(QString{}, Qt::FindDirectChildrenOnly))
-            widget->setVisible(widget == noProduct_ ? !visible : visible);
-    }
-
-    void updateTabs(int index)
-    {
-        markSelected(*viewTab_, index == 0);
-        markSelected(*addTab_, index == 1);
-        viewTab_->setFont(interfaceFont(14, index == 0 ? QFont::DemiBold : QFont::Normal));
-        addTab_->setFont(interfaceFont(14, index == 1 ? QFont::DemiBold : QFont::Normal));
-        indicator_->setGeometry(index == 0 ? 0 : 168, 101, index == 0 ? 124 : 103, 3);
-    }
-
-    static void showMetadata(QScrollArea& area, int width, const QString& path, bool draft)
-    {
-        auto* content = newRows(area, width);
-        label(content, {0, 0, width, 16}, "Image filename", 12, detailMuted);
-        auto* name = label(content, {0, 24, width, 17}, {}, 14, detailInk);
-        const int nameHeight = wrapHeight(*name,
-            path.isEmpty() ? (draft ? "Not saved yet" : "—") : QFileInfo(path).fileName(), 17);
-        name->setFixedHeight(nameHeight);
-        label(content, {0, 32 + nameHeight, width, 16}, "Image path", 12, detailMuted);
-        auto* location = label(content, {0, 56 + nameHeight, width, 17}, {}, 14, detailInk);
-        const int pathHeight = wrapHeight(*location,
-            path.isEmpty() ? (draft ? "Available after saving" : "—") : path, 17);
-        location->setFixedHeight(pathHeight);
-        finishRows(area, *content, 64 + nameHeight + pathHeight);
-    }
-
-    PosWindow& window_;
-    CatalogueTabs* tabs_ = nullptr;
-    QPushButton* viewTab_ = nullptr;
-    QPushButton* addTab_ = nullptr;
-    QWidget* indicator_ = nullptr;
-    QWidget* details_ = nullptr;
-    QScrollArea* products_ = nullptr;
-    QScrollArea* info_ = nullptr;
-    QScrollArea* draftInfo_ = nullptr;
-    QLabel* status_ = nullptr;
-    QLabel* stockHint_ = nullptr;
-    std::unique_ptr<BarcodeDisplay> savedImage_;
-    std::unique_ptr<BarcodeDisplay> newImage_;
-    QLabel* noProduct_ = nullptr;
-    QWidget* barcodeFrame_ = nullptr;
-    QLabel* draftStatus_ = nullptr;
-    QLabel* editError_ = nullptr;
-    QLabel* addError_ = nullptr;
-    QPushButton* remove_ = nullptr;
+    QPushButton* pdf_ = nullptr;
+    QPushButton* resume_ = nullptr;
+    QPushButton* correction_ = nullptr;
+    QLabel* summary_ = nullptr;
+    QLineEdit* pin_ = nullptr;
+    QPushButton* approve_ = nullptr;
+    QPushButton* commit_ = nullptr;
     QPushButton* cancel_ = nullptr;
-    QPushButton* update_ = nullptr;
-    std::unique_ptr<ProductFields> edit_;
-    std::unique_ptr<ProductFields> create_;
-    optional<Product> selected_;
+    bool showingArchives_ = false;
+    bool cashier_ = false;
+    bool archiveAvailable_ = true;
+    bool canOpenPdf_ = false;
+    bool editing_ = false;
+    bool previewValid_ = false;
+    bool approved_ = false;
+    bool editBusy_ = false;
+    int64_t settledDelta_ = 0;
+
+    void resetEditor()
+    {
+        editing_ = false;
+        previewValid_ = false;
+        approved_ = false;
+        editBusy_ = false;
+        summary_ = nullptr;
+        pin_ = nullptr;
+        approve_ = nullptr;
+        commit_ = nullptr;
+        cancel_ = nullptr;
+        editRows_.clear();
+    }
+
+    void synchronizeEditor()
+    {
+        if (!editing_ || !pin_) return;
+        for (const auto& row : editRows_) {
+            row.quantity->setEnabled(!editBusy_);
+            const auto quantity = quantityInput(row.quantity->text(), row.line.unit);
+            row.restock->setEnabled(!editBusy_ && quantity.success && quantity.value < row.line.quantity);
+        }
+        pin_->setEnabled(previewValid_ && !approved_ && !editBusy_);
+        approve_->setEnabled(previewValid_ && !approved_ && !editBusy_);
+        commit_->setEnabled(approved_ && !editBusy_);
+        cancel_->setEnabled(!editBusy_);
+    }
+
+    void changePreview()
+    {
+        if (editBusy_ || !editing_ || !order_) return;
+        vector<QuantityChange> edits;
+        const auto id = order_->ids.orderId;
+        for (const auto& line : editRows_) {
+            const auto quantity = quantityInput(line.quantity->text(), line.line.unit);
+            if (!quantity.success) {
+                window_.cancelPaidEdit();
+                showError("Enter a valid revised quantity.");
+                return;
+            }
+            if (quantity.value == line.line.quantity) continue;
+            const auto restock = quantity.value < line.line.quantity ?
+                quantityInput(line.restock->text(), line.line.unit) : Result<int64_t>{true, {}, 0};
+            if (!restock.success) {
+                window_.cancelPaidEdit();
+                showError("Enter a valid restock quantity, including zero if nothing can be returned.");
+                return;
+            }
+            edits.push_back({line.line.productId, quantity.value, restock.value});
+        }
+        window_.onPreviewPaidEdit(id, edits);
+    }
+
+    void beginEdit()
+    {
+        if (!order_ || !paidEditEligible(*order_)) return;
+        window_.cancelPaidEdit();
+        showError({});
+        editing_ = true;
+        archive_->hide();
+        pdf_->hide();
+        correction_->hide();
+
+        auto* content = newRows(*bill_, 820);
+        auto* layout = new QVBoxLayout(content);
+        layout->setContentsMargins(28, 22, 20, 22);
+        auto* title = new QLabel("Edit Paid Quantities");
+        title->setFont(interfaceFont(20, QFont::DemiBold));
+        title->setStyleSheet("color:#242424;");
+        layout->addWidget(title);
+        auto* form = new QFormLayout;
+        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        for (const auto& line : order_->lines) {
+            auto* fields = new QWidget;
+            auto* inputs = new QHBoxLayout(fields);
+            inputs->setContentsMargins(0, 0, 0, 0);
+            auto* quantity = new QLineEdit(quantityText(line.quantity, line.unit));
+            auto* restock = new QLineEdit(quantityText(0, line.unit));
+            quantity->setAccessibleName("Revised quantity for " + text(line.name));
+            restock->setAccessibleName("Restock quantity for " + text(line.name));
+            quantity->setValidator(new QRegularExpressionValidator(quantityPattern(line.unit), quantity));
+            restock->setValidator(new QRegularExpressionValidator(quantityPattern(line.unit), restock));
+            restock->setEnabled(false);
+            inputs->addWidget(new QLabel("New qty"));
+            inputs->addWidget(quantity);
+            inputs->addWidget(new QLabel("Restock"));
+            inputs->addWidget(restock);
+            auto* label = new QLabel(text(line.name) + "\n" + quantityText(line.quantity, line.unit) + " " + unitShort(line.unit));
+            label->setTextFormat(Qt::PlainText);
+            label->setWordWrap(true);
+            form->addRow(label, fields);
+            editRows_.push_back({line, quantity, restock});
+            connect(quantity, &QLineEdit::textEdited, this, [this] { changePreview(); });
+            connect(restock, &QLineEdit::textEdited, this, [this] { changePreview(); });
+        }
+        layout->addLayout(form);
+        summary_ = new QLabel;
+        summary_->setTextFormat(Qt::PlainText);
+        summary_->setWordWrap(true);
+        summary_->setMinimumHeight(82);
+        layout->addWidget(summary_);
+
+        auto* controls = new QHBoxLayout;
+        pin_ = new QLineEdit;
+        pin_->setEchoMode(QLineEdit::Password);
+        pin_->setMaxLength(4);
+        pin_->setPlaceholderText("Manager PIN");
+        pin_->setAccessibleName("Manager PIN");
+        pin_->setValidator(new QRegularExpressionValidator(QRegularExpression("[0-9]{4}"), pin_));
+        approve_ = new QPushButton("Approve");
+        commit_ = new QPushButton("Confirm Settlement");
+        cancel_ = new QPushButton("Cancel");
+        for (auto* button : {approve_, commit_, cancel_}) button->setMinimumHeight(39);
+        controls->addWidget(pin_, 1);
+        controls->addWidget(approve_);
+        controls->addWidget(commit_);
+        controls->addWidget(cancel_);
+        layout->addLayout(controls);
+        layout->addStretch();
+
+        connect(approve_, &QPushButton::clicked, this, [this] { window_.onApprovePaidEdit(pin_->text().toStdString()); });
+        connect(commit_, &QPushButton::clicked, this, [this] {
+            if (!approved_ || editBusy_ || !order_) return;
+            if (QMessageBox::question(this, "Confirm Settlement",
+                "Confirm the approved payment adjustment has been settled.") == QMessageBox::Yes)
+                window_.onCommitPaidEdit(settledDelta_);
+        });
+        connect(cancel_, &QPushButton::clicked, this, [this] {
+            if (order_) {
+                const auto id = order_->ids.orderId;
+                window_.onOrderSelected(id);
+            }
+        });
+        finishRows(*bill_, *content, std::max(600, layout->sizeHint().height()));
+        synchronizeEditor();
+    }
 };
 
 QString assetPath(const QString& filename)
@@ -1827,6 +1690,116 @@ protected:
 private:
     QImage image_;
     int radius_;
+};
+
+QLineEdit* pinInput(QWidget* parent, QRect bounds, const QString& caption)
+{
+    auto* field = edit(parent, bounds, caption, caption);
+    field->setEchoMode(QLineEdit::Password);
+    field->setMaxLength(4);
+    field->setValidator(new QRegularExpressionValidator(QRegularExpression("[0-9]{4}"), field));
+    return field;
+}
+
+class LaunchPage final : public QWidget {
+public:
+    LaunchPage(QWidget* parent, PosWindow& window) : QWidget(parent)
+    {
+        setGeometry(0, 40, canvasWidth, canvasHeight - 40);
+        auto* launch = panel(this, {310, 138, 1164, 698}, "#ffffff", "#e3e3e3");
+        auto* brand = new Artwork(launch, "eyeris-background.png", 17);
+        brand->setGeometry(36, 29, 455, 639);
+        new SvgIcon(brand, {104, 289, 247, 70}, wordmarkSvg);
+
+        pick_ = new QWidget(launch);
+        pick_->setGeometry(570, 176, 526, 336);
+        label(pick_, {0, 0, 526, 43}, "Choose a role", 36, ink, QFont::Medium);
+        const auto card = [this, &window](Role role, const QString& name, const QString& detail, int y) {
+            auto* hit = action(pick_, {0, y, 526, 94}, {}, Action::Secondary);
+            hit->setAccessibleName(name);
+            label(hit, {20, 20, 440, 24}, name, 20, ink, QFont::DemiBold);
+            label(hit, {20, 54, 440, 16}, detail, 14, muted);
+            label(hit, {478, 31, 24, 29}, "→", 24, ink);
+            connect(hit, &QPushButton::clicked, &window, [&window, role] { window.onRoleSelected(role); });
+        };
+        card(Role::Cashier, "Cashier", "Scan products and take payments.", 109);
+        card(Role::Manager, "Manager", "Manage products, orders and reports.", 219);
+
+        pinPanel_ = new QWidget(launch);
+        pinPanel_->setGeometry(570, 176, 526, 365);
+        pinHeading_ = label(pinPanel_, {0, 0, 526, 43}, "Manager PIN", 36, ink, QFont::Medium);
+        pinHint_ = label(pinPanel_, {0, 55, 526, 31}, {}, 14, muted);
+        pin_ = pinInput(pinPanel_, {0, 111, 402, 40}, "Manager PIN");
+        confirm_ = pinInput(pinPanel_, {0, 166, 402, 40}, "Confirm Manager PIN");
+        auto* back = action(pinPanel_, {0, 258, 112, 42}, "Back", Action::Secondary);
+        submit_ = action(pinPanel_, {355, 258, 170, 42}, "Continue", Action::Primary);
+        connect(back, &QPushButton::clicked, this, &LaunchPage::showPicker);
+        const auto submit = [this] {
+            if (submitted) submitted(pin_->text().toStdString(), confirm_->text().toStdString(), initialize_);
+        };
+        connect(submit_, &QPushButton::clicked, this, submit);
+        connect(pin_, &QLineEdit::returnPressed, this, submit);
+        connect(confirm_, &QLineEdit::returnPressed, this, submit);
+        feedback_ = label(launch, {570, 512, 526, 55}, {}, 14, errorInk);
+        feedback_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        feedback_->setWordWrap(true);
+        showPicker();
+    }
+
+    function<void(const string&, const string&, bool)> submitted;
+
+    void showPicker()
+    {
+        pick_->show();
+        pinPanel_->hide();
+        pin_->clear();
+        confirm_->clear();
+        showFeedback({});
+    }
+
+    void showPin(bool initialize)
+    {
+        initialize_ = initialize;
+        pick_->hide();
+        pinPanel_->show();
+        pinHeading_->setText(initialize ? "Set Manager PIN" : "Manager PIN");
+        pinHint_->setText(initialize ? "Choose a four-digit PIN for manager access and paid edits." :
+            "Enter the four-digit PIN to open Manager.");
+        confirm_->setVisible(initialize);
+        submit_->setText(initialize ? "Set PIN" : "Continue");
+        showFeedback({});
+        pin_->setFocus();
+    }
+
+    void setPending(bool pending)
+    {
+        pick_->setEnabled(!pending);
+        pinPanel_->setEnabled(!pending);
+        if (pending) showFeedback("Checking Manager access…");
+    }
+
+    void showFeedback(const string& message) { feedback_->setText(text(message)); }
+
+    void clearPin()
+    {
+        pin_->clear();
+        confirm_->clear();
+    }
+
+private:
+    QWidget* pick_ = nullptr;
+    QWidget* pinPanel_ = nullptr;
+    QLabel* pinHeading_ = nullptr;
+    QLabel* pinHint_ = nullptr;
+    QLabel* feedback_ = nullptr;
+    QLineEdit* pin_ = nullptr;
+    QLineEdit* confirm_ = nullptr;
+    QPushButton* submit_ = nullptr;
+    bool initialize_ = false;
+};
+
+constexpr array<const char*, 5> pageNames{
+    "Current Order", "Order History", "Products & Discounts", "Reports", "Settings"
 };
 
 class TitleBar final : public QWidget {
@@ -1899,17 +1872,12 @@ public:
 
 } // namespace
 
-PosWindow::PosWindow(ProductService& products, BarcodeAssetService& images,
-                     CartService& cart, PosScanner& scanner,
-                     CheckoutService& checkout, HistoryService& history,
-                     QWidget* parent)
-    : QMainWindow(parent),
-      products_(products),
-      images_(images),
-      cart_(cart),
-      scanner_(scanner),
-      checkout_(checkout),
-      history_(history) {
+PosWindow::PosWindow(ProductService& products, DiscountService& discounts, CartService& cart,
+                     PosScanner& scanner, CheckoutService& checkout, HistoryService& history,
+                     const ReportService& reports, ManagerPinService& access, QWidget* parent)
+    : QMainWindow(parent), products_(products), discounts_(discounts), cart_(cart),
+      scanner_(scanner), checkout_(checkout), history_(history), reports_(reports), access_(access)
+{
     setWindowTitle("Eyeris");
     setWindowFlag(Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground);
@@ -1917,213 +1885,313 @@ PosWindow::PosWindow(ProductService& products, BarcodeAssetService& images,
     shell->setObjectName("eyerisCanvas");
     shell->setFixedSize(canvasWidth, canvasHeight);
     new TitleBar(shell, *this);
-    auto* sidebar = new Artwork(shell, "eyeris-sidebar-background.png", 21);
-    sidebar->setGeometry(24, 64, 210, 958);
-    auto* wordmark = new SvgIcon(sidebar, {19, 29, 168, 48}, wordmarkSvg);
+    sidebar_ = new Artwork(shell, "eyeris-sidebar-background.png", 21);
+    sidebar_->setGeometry(24, 64, 210, 958);
+    auto* wordmark = new SvgIcon(sidebar_, {19, 29, 168, 48}, wordmarkSvg);
     wordmark->setObjectName("eyerisWordmark");
     wordmark->setAccessibleName("Eyeris");
-    const std::array<string, 3> destinations{"Current Order", "Order History", "Product Catalogue"};
-    auto* pages = new QStackedWidget(shell);
-    pages->setGeometry(pageLeft, 64, pageWidth, 958);
-    std::array<QPushButton*, 3> navigation{};
-    for (size_t i = 0; i < destinations.size(); ++i) {
-        navigation[i] = action(sidebar, {11, 99 + 52 * static_cast<int>(i), 186, 42},
-                               text(destinations[i]), Action::Navigation);
-        navigation[i]->setProperty("primaryNav", i == 0);
-        connect(navigation[i], &QPushButton::clicked, this, [this, name = destinations[i]] {
-            showPage(name);
-        });
+    for (const char* name : pageNames) {
+        auto* link = action(sidebar_, {11, 99, 186, 42}, QString::fromLatin1(name), Action::Navigation);
+        navigation_.push_back(link);
+        connect(link, &QPushButton::clicked, this, [this, destination = string(name)] { showPage(destination); });
     }
-    const auto markNavigation = [navigation](int active) {
-        for (size_t i = 0; i < navigation.size(); ++i) {
-            const bool selected = static_cast<int>(i) == active;
-            markSelected(*navigation[i], selected);
-            navigation[i]->setFont(interfaceFont(14, selected ? QFont::DemiBold : QFont::Normal));
-        }
+    auto* switchRole = action(sidebar_, {11, 888, 186, 42}, "Switch Role", Action::Navigation);
+    connect(switchRole, &QPushButton::clicked, this, &PosWindow::showRolePicker);
+
+    pages_ = new QStackedWidget(shell);
+    pages_->setGeometry(pageLeft, 64, pageWidth, 958);
+    currentOrderPage_ = new CurrentOrderPage(*this);
+    historyPage_ = new HistoryPage(*this);
+    cataloguePage_ = new ManagerCataloguePage(products_, discounts_);
+    reportsPage_ = new ReportsPage;
+    reportsPage_->setGenerateAction([this](const ReportRequest& request) { onGenerateReport(request); });
+    settingsPage_ = new QWidget;
+    label(settingsPage_, {0, -1, 616, 43}, "Settings", 36, ink, QFont::Medium);
+    label(settingsPage_, {0, 45, 800, 16}, "Manage access to this terminal.", 14, muted);
+    auto* settings = panel(settingsPage_, {0, 81, 816, 596});
+    label(settings, {28, 28, 760, 24}, "Change PIN", 20, ink, QFont::DemiBold);
+    label(settings, {28, 61, 760, 16}, "Use four digits. The new PIN also applies to paid-bill approvals.", 14, muted);
+    label(settings, {28, 146, 402, 16}, "Current PIN", 14, ink);
+    auto* currentPin = pinInput(settings, {28, 169, 402, 40}, "Current PIN");
+    label(settings, {28, 237, 402, 16}, "New PIN", 14, ink);
+    auto* newPin = pinInput(settings, {28, 260, 402, 40}, "New PIN");
+    label(settings, {28, 328, 402, 16}, "Confirm new PIN", 14, ink);
+    auto* confirm = pinInput(settings, {28, 351, 402, 40}, "Confirm new PIN");
+    settingsFeedback_ = label(settings, {28, 401, 760, 39}, {}, 14, errorInk);
+    settingsFeedback_->setWordWrap(true);
+    rule(settings, 28, 445, 760);
+    auto* back = action(settings, {28, 481, 120, 42}, "Back", Action::Secondary);
+    changePin_ = action(settings, {631, 481, 156, 42}, "Save PIN", Action::Primary);
+    connect(back, &QPushButton::clicked, this, [this] { showPage("Products & Discounts"); });
+    connect(changePin_, &QPushButton::clicked, this, [this, currentPin, newPin, confirm] {
+        onChangePin(currentPin->text().toStdString(), newPin->text().toStdString(), confirm->text().toStdString());
+    });
+
+    pages_->addWidget(currentOrderPage_);
+    pages_->addWidget(historyPage_);
+    pages_->addWidget(cataloguePage_);
+    pages_->addWidget(reportsPage_);
+    pages_->addWidget(settingsPage_);
+    connect(pages_, &QStackedWidget::currentChanged, this, [this] { updateNavigation(); });
+    auto* launch = new LaunchPage(shell, *this);
+    launch->submitted = [this](const string& pin, const string& confirmation, bool initialize) {
+        submitManagerPin(pin, confirmation, initialize);
     };
-    connect(pages, &QStackedWidget::currentChanged, this, markNavigation);
+    launchPage_ = launch;
     setCentralWidget(new PosViewport(shell));
     if (const auto* screen = QGuiApplication::primaryScreen()) {
         const auto available = screen->availableGeometry().adjusted(8, 8, -8, -8);
-        const QSize size(std::min(canvasWidth, available.width()),
-                         std::min(canvasHeight, available.height()));
+        const QSize size(std::min(canvasWidth, available.width()), std::min(canvasHeight, available.height()));
         resize(size);
         move(available.center() - QPoint(size.width() / 2, size.height() / 2));
     } else {
         resize(canvasWidth, canvasHeight);
     }
-    auto* currentOrder = new CurrentOrderPage(*this);
-    auto* historyPage = new HistoryPage(*this);
-    auto* catalogue = new CataloguePage(*this);
-    bindPages(*pages, *currentOrder, *historyPage, *catalogue, catalogue->tabs());
-    markNavigation(pages->currentIndex());
 
     cameraTimer_.setInterval(200);
     cameraTimer_.setTimerType(Qt::CoarseTimer);
     connect(&cameraTimer_, &QTimer::timeout, this, &PosWindow::onCameraTick);
+    showRolePicker();
 }
 
-// gives PosWindow the real Qt pages when the interface is ready
-void PosWindow::bindPages(QStackedWidget& pages, CurrentOrderView& currentOrder,
-                          OrderHistoryView& history, CatalogueView& catalogue,
-                          QTabWidget& catalogueTabs) {
+void PosWindow::onRoleSelected(Role role)
+{
+    if (busy_ || role_) return;
+    if (role == Role::Cashier) {
+        enterRole(role);
+        return;
+    }
+    auto* launch = static_cast<LaunchPage*>(launchPage_);
+    busy_ = true;
+    launch->setPending(true);
+    access_.hasPin([window = QPointer<PosWindow>(this)](Result<bool> result) {
+        if (!window) return;
+        window->busy_ = false;
+        auto* launch = static_cast<LaunchPage*>(window->launchPage_);
+        launch->setPending(false);
+        if (result.success) launch->showPin(!result.value);
+        else launch->showFeedback(result.message);
+    });
+}
+
+void PosWindow::submitManagerPin(const string& pin, const string& confirmation, bool initialize)
+{
+    if (busy_ || role_) return;
+    auto* launch = static_cast<LaunchPage*>(launchPage_);
+    if (initialize && pin != confirmation) {
+        launch->showFeedback("The two PINs must match.");
+        return;
+    }
+    busy_ = true;
+    launch->setPending(true);
+    auto completed = [window = QPointer<PosWindow>(this)](Status result) {
+        if (!window) return;
+        window->busy_ = false;
+        auto* launch = static_cast<LaunchPage*>(window->launchPage_);
+        launch->setPending(false);
+        launch->clearPin();
+        if (result.success) window->enterRole(Role::Manager);
+        else launch->showFeedback(result.message);
+    };
+    if (initialize) access_.initializePin(pin, std::move(completed));
+    else access_.verifyPin(pin, std::move(completed));
+}
+
+void PosWindow::enterRole(Role role)
+{
+    role_ = role;
+    static_cast<HistoryPage*>(historyPage_)->setCashierActions(role == Role::Cashier);
+    launchPage_->hide();
+    sidebar_->show();
+    pages_->show();
+    showPage(role == Role::Cashier ? "Current Order" : "Products & Discounts");
+}
+
+void PosWindow::showRolePicker()
+{
+    if (busy_) return;
     stopCurrentOrderCamera();
-    pages_ = &pages;
-    currentOrderPage_ = &currentOrder;
-    historyPage_ = &history;
-    cataloguePage_ = &catalogue;
-    catalogueTabs_ = &catalogueTabs;
+    clearOrderSelection();
+    role_.reset();
+    pages_->hide();
+    sidebar_->hide();
+    for (auto* field : settingsPage_->findChildren<QLineEdit*>()) field->clear();
+    settingsFeedback_->clear();
+    auto* launch = static_cast<LaunchPage*>(launchPage_);
+    launch->showPicker();
+    launch->show();
+    launch->raise();
+}
 
-    for (QWidget* page : {currentOrderPage_, historyPage_, cataloguePage_}) {
-        if (pages.indexOf(page) < 0) {
-            pages.addWidget(page);
-        }
+void PosWindow::updateNavigation()
+{
+    int y = 99;
+    for (size_t i = 0; i < navigation_.size(); ++i) {
+        auto* link = navigation_[i];
+        const bool available = role_ && (*role_ == Role::Cashier ? i <= 1 : i >= 1);
+        link->setVisible(available);
+        if (!available) continue;
+        link->move(11, y);
+        y += 52;
+        const bool active = static_cast<int>(i) == pages_->currentIndex();
+        markSelected(*link, active);
+        link->setFont(interfaceFont(14, active ? QFont::DemiBold : QFont::Normal));
     }
 }
 
-void PosWindow::onCameraTick() {                                        // called on each tick
-    if (!currentOrderPage_) {
+void PosWindow::onChangePin(const string& currentPin, const string& newPin, const string& confirmation)
+{
+    if (busy_ || role_ != Role::Manager) return;
+    if (newPin != confirmation) {
+        settingsFeedback_->setStyleSheet("color:#a22922;");
+        settingsFeedback_->setText("The new PIN and confirmation must match.");
         return;
     }
-
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-    const Result<ScanResult> scane = scanner_.poll();                   // poll asks scanner to read one frame and check for a barcode, returns a result object
-
-    if (!scane.success) {       // stops the camera if reading the frame failed
-        cameraStatus_ = {false, scane.message};
-        cameraTimer_.stop();
-        scanner_.stop();
-        view.showCameraPreview({});
-        view.showScannerMessage(cameraStatus_.message);
-        return;
-    }
-
-    view.showCameraPreview(mat2QImage(scane.value.preview));
-    if (!scane.value.decoded.found) {                                                        // keep showing the preview while waiting for a barcode
-        view.showScannerMessage(scane.message);
-        return;
-    }
-    if (!scane.value.codeChanged) {
-        if (hasSelectedProduct_ && scane.value.decoded.code == selectedProduct_.barcode) {
-            view.showScannerMessage({});
+    busy_ = true;
+    changePin_->setEnabled(false);
+    for (auto* field : settingsPage_->findChildren<QLineEdit*>()) field->setEnabled(false);
+    settingsFeedback_->setText("Saving PIN…");
+    access_.changePin(currentPin, newPin, [window = QPointer<PosWindow>(this)](Status result) {
+        if (!window) return;
+        window->busy_ = false;
+        window->changePin_->setEnabled(true);
+        for (auto* field : window->settingsPage_->findChildren<QLineEdit*>()) {
+            field->setEnabled(true);
+            field->clear();
         }
-        return;
-    }
-
-    if (!choosingHeldOrder_) addScannedProduct(scane.value.decoded.code);
+        window->settingsFeedback_->setStyleSheet(result.success ? "color:#225f45;" : "color:#a22922;");
+        window->settingsFeedback_->setText(result.success ? "Manager PIN changed." : text(result.message));
+    });
 }
 
-void PosWindow::addScannedProduct(const string& barcode) {
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-    const Result<Product> product = products_.findByBarcode(barcode);
+void PosWindow::onCameraTick()
+{
+    const auto scan = scanner_.poll();
+    if (!scan.success) {
+        stopCurrentOrderCamera();
+        currentOrderPage_->showCameraPreview({});
+        currentOrderPage_->showScannerMessage(scan.message);
+        return;
+    }
+    currentOrderPage_->showCameraPreview(mat2QImage(scan.value.preview));
+    if (!scan.value.decoded.found) {
+        currentOrderPage_->showScannerMessage(scan.message);
+        return;
+    }
+    if (scan.value.codeChanged && !choosingHeldOrder_ && !busy_) addScannedProduct(scan.value.decoded.code);
+    else if (scan.value.decoded.code == scannedBarcode_) currentOrderPage_->showScannerMessage({});
+}
+
+void PosWindow::addScannedProduct(const string& barcode)
+{
+    const auto product = products_.findWithStockByBarcode(barcode, resumedOrderId_);
     if (!product.success) {
-        view.showScannerMessage(product.message);
+        currentOrderPage_->showScannerMessage(product.message);
         return;
     }
-
-    view.showScannerMessage({});
-    selectedProduct_ = product.value;
-    hasSelectedProduct_ = true;
-    view.showScannedProduct(selectedProduct_);
-    const Status result = cart_.addByBarcode(selectedProduct_.barcode, 1000);
-    const bool samePending = pendingProduct_ && pendingProduct_->id == selectedProduct_.id;
-    if (result.success && samePending) pendingProduct_.reset();
-    if (!result.success) {
+    scannedBarcode_ = barcode;
+    currentOrderPage_->showScannerMessage({});
+    currentOrderPage_->showScannedProduct(product.value);
+    const auto& current = product.value.product;
+    const auto added = cart_.addByBarcode(barcode, 1000);
+    const bool samePending = pendingProduct_ && pendingProduct_->id == current.id;
+    if (added.success && samePending) pendingProduct_.reset();
+    if (!added.success && product.value.stock.available > 0 && (!pendingProduct_ || samePending)) {
         const auto items = cart_.items();
-        const bool exists = std::any_of(items.begin(), items.end(), [this](const CartItem& item) { return item.product.id == selectedProduct_.id; });
-        if (!exists && selectedProduct_.available > 0 && (!pendingProduct_ || samePending))
-            pendingProduct_ = selectedProduct_;
+        const bool present = std::any_of(items.begin(), items.end(), [&current](const CartItem& item) {
+            return item.product.id == current.id;
+        });
+        if (!present) pendingProduct_ = current;
     }
-    const string error = refreshCart();
-    view.showCartError(result.success ? error : result.message);
-    view.selectQuantity(selectedProduct_.id);
-    if (result.success) QApplication::beep();
+    const auto error = refreshCart();
+    currentOrderPage_->showCartError(added.success ? error : added.message);
+    currentOrderPage_->selectQuantity(current.id);
+    if (added.success) QApplication::beep();
 }
 
-// updates an existing row. zero removes the row here
-void PosWindow::onCartQuantityChanged(const string& productId, int64_t quantity) {
+void PosWindow::onCartQuantityChanged(const string& productId, int64_t quantity)
+{
+    if (busy_) return;
     const bool pending = pendingProduct_ && pendingProduct_->id == productId;
-    Status result;
-    if (pending) {
-        if (quantity <= 0) { cancelPendingQuantity(productId); return; }
-        result = cart_.addByBarcode(pendingProduct_->barcode, quantity);
-        if (result.success) { pendingProduct_.reset(); QApplication::beep(); }
-    } else result = cart_.setQuantity(productId, quantity);
-    if (currentOrderPage_) {
-        auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-        const string refreshError = refreshCart();
-        view.showCartError(result.success ? refreshError : result.message);
-        if (!result.success) view.selectQuantity(productId);
+    if (pending && quantity == 0) {
+        cancelPendingQuantity(productId);
+        return;
     }
+    const auto result = pending ? cart_.addByBarcode(pendingProduct_->barcode, quantity)
+        : cart_.setQuantity(productId, quantity);
+    if (result.success) currentOrderPage_->clearQuantityDraft(productId);
+    if (pending && result.success) {
+        pendingProduct_.reset();
+        QApplication::beep();
+    }
+    const auto error = refreshCart();
+    currentOrderPage_->showCartError(result.success ? error : result.message);
+    if (!result.success) currentOrderPage_->selectQuantity(productId);
 }
 
-// gets the actual rows and their amounts from the cart after a quantity change
-string PosWindow::refreshCart() {
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-    const vector<CartItem> items = cart_.items();
-    vector<optional<int64_t>> amounts;
-    amounts.reserve(items.size());
+string PosWindow::refreshCart()
+{
+    auto items = cart_.items();
+    vector<optional<int64_t>> amounts(items.size());
     string error;
-    for (const CartItem& item : items) {
-        const Result<Totals> line = cart_.lineTotals(item.product.id);
-        if (line.success) {
-            amounts.push_back(line.value.subtotal);
-        } else {
-            amounts.push_back(nullopt);
-            if (error.empty()) {
-                error = line.message;
+    currentQuote_.reset();
+    if (!items.empty()) {
+        const auto quote = checkout_.quote(items, resumedOrderId_, currentTimestamp());
+        if (quote.success) {
+            currentQuote_ = quote.value;
+            for (size_t i = 0; i < amounts.size(); ++i) {
+                amounts[i] = quote.value.lineSubtotals[i];
+                const auto& line = quote.value.lines[i];
+                items[i].product.unitPrice = line.unitPrice;
+                items[i].product.discountPerUnit = line.discountPerUnit;
+                items[i].product.taxRate = line.taxRate;
             }
+        } else {
+            error = quote.message;
         }
     }
-
-    const Result<Totals> totals = cart_.totals();
-    auto displayed = items;
     if (pendingProduct_) {
-        displayed.push_back({*pendingProduct_, 0});
+        items.push_back({*pendingProduct_, 0});
         amounts.push_back(nullopt);
-        if (error.empty()) {
-            error = ("Enter a quantity for " + text(pendingProduct_->name) +
-                     " within the available stock (" +
-                     quantityText(pendingProduct_->available, pendingProduct_->unit) + " " +
-                     unitShort(pendingProduct_->unit) + ").").toStdString();
-        }
+        if (error.empty()) error = "Enter an available quantity for " + pendingProduct_->name + ".";
     }
-    view.showCart(displayed, amounts, totals.success ? optional<Totals>{totals.value} : nullopt);
-    return totals.success || !error.empty() ? error : totals.message;
+    currentOrderPage_->showCart(items, amounts, currentQuote_ ? optional<Totals>{currentQuote_->totals} : nullopt);
+    return error;
 }
 
-void PosWindow::cancelPendingQuantity(const string& productId) {
+void PosWindow::cancelPendingQuantity(const string& productId)
+{
+    currentOrderPage_->clearQuantityDraft(productId);
     if (!pendingProduct_ || pendingProduct_->id != productId) return;
     pendingProduct_.reset();
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-    view.showCartError(refreshCart());
+    currentOrderPage_->showCartError(refreshCart());
 }
 
-void PosWindow::onHeldOrdersClicked() {
-    if (!currentOrderPage_ || choosingHeldOrder_) return;
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-    if (!cart_.items().empty() || pendingProduct_ || view.hasDraft() || !resumedOrderId_.empty()) {
-        view.showBillError("Finish or hold the current order before opening a held order."); return;
+void PosWindow::onHeldOrdersClicked()
+{
+    if (busy_ || choosingHeldOrder_ || role_ != Role::Cashier) return;
+    if (!cart_.items().empty() || pendingProduct_ || currentOrderPage_->hasDraft() || !resumedOrderId_.empty()) {
+        currentOrderPage_->showBillError("Finish or hold the active order before opening a held order.");
+        return;
     }
     const auto orders = history_.list();
-    if (!orders.success) { view.showBillError(orders.message); return; }
+    if (!orders.success) { currentOrderPage_->showBillError(orders.message); return; }
     QDialog picker(this);
     picker.setWindowTitle("Held Orders");
     picker.resize(480, 320);
     auto* layout = new QVBoxLayout(&picker);
-    layout->addWidget(new QLabel("Select an order to resume.", &picker));
-    auto* list = new QListWidget(&picker);
+    layout->addWidget(new QLabel("Select an order to resume."));
+    auto* list = new QListWidget;
     list->setAccessibleName("Held orders");
     layout->addWidget(list);
     for (const auto& order : orders.value) {
         if (order.status != OrderStatus::OnHold) continue;
-        auto* row = new QListWidgetItem(
-            text(order.customer.name) + "   ·   #" + text(order.ids.orderId) +
-            "   ·   PKR " + formattedMoney(order.totals.payable), list);
+        auto* row = new QListWidgetItem(text(order.customer.name) + "  ·  #" + text(order.ids.orderId) +
+            "  ·  PKR " + formattedMoney(order.totals.payable), list);
         row->setData(Qt::UserRole, text(order.ids.orderId));
     }
     if (list->count() == 0) {
-        view.showBillError("No held orders.");
+        currentOrderPage_->showBillError("No held orders.");
         return;
     }
     QString orderId;
@@ -2134,375 +2202,320 @@ void PosWindow::onHeldOrdersClicked() {
     connect(list, &QListWidget::itemClicked, &picker, choose);
     connect(list, &QListWidget::itemActivated, &picker, choose);
     const QScopedValueRollback<bool> choosing(choosingHeldOrder_, true);
-    if (picker.exec() != QDialog::Accepted || orderId.isEmpty()) return;
-    const auto held = checkout_.resumeHeldOrder(orderId.toStdString());
-    if (!held.success) { view.showBillError(held.message); return; }
-    cart_.restoreHeldItems(held.value);
-    resumedOrderId_ = held.value.sale.ids.orderId;
-    view.setCustomer(held.value.sale.customer);
-    view.showBillError(held.value.usesLegacyTax ? "Legacy order: edited totals use current tax rates where saved rates are missing." : "");
-    view.showCartError(refreshCart());
+    if (picker.exec() == QDialog::Accepted && !orderId.isEmpty()) onResumeOrder(orderId.toStdString());
 }
 
-// generates and saves a paid bill using the entered payment details
-void PosWindow::onGenerateBillClicked() {
-    generateCurrentBill(OrderStatus::Paid);
-}
-
-// saves the complete bill on hold so it can be paid later
-void PosWindow::onGenerateAndHoldClicked() {
-    generateCurrentBill(OrderStatus::OnHold);
-}
-
-void PosWindow::generateCurrentBill(OrderStatus status) {
-    if (!currentOrderPage_ || savingBill_) {
+void PosWindow::onResumeOrder(const string& orderId)
+{
+    if (busy_ || !role_) return;
+    const auto notice = [this](const string& value) {
+        if (pages_->currentWidget() == historyPage_) historyPage_->showError(value);
+        else currentOrderPage_->showBillError(value);
+    };
+    if (*role_ != Role::Cashier) {
+        notice("Switch to Cashier to resume a held order.");
         return;
     }
+    if (!cart_.items().empty() || pendingProduct_ || currentOrderPage_->hasDraft() || !resumedOrderId_.empty()) {
+        notice("Finish or hold the active order before opening a held order.");
+        return;
+    }
+    const auto held = checkout_.resumeHeldOrder(orderId);
+    if (!held.success) { notice(held.message); return; }
+    cart_.restoreHeldItems(held.value);
+    resumedOrderId_ = held.value.sale.ids.orderId;
+    currentOrderPage_->setCheckoutOrder(&held.value.sale);
+    currentOrderPage_->setCustomer(held.value.sale.customer);
+    showPage("Current Order");
+    const auto error = refreshCart();
+    currentOrderPage_->showCartError(error);
+    currentOrderPage_->showBillError(error.empty() ? "Resumed with current prices and discounts." : error);
+}
 
-    auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
+void PosWindow::onGenerateBillClicked() { generateCurrentBill(OrderStatus::Paid); }
+
+void PosWindow::onGenerateAndHoldClicked() { generateCurrentBill(OrderStatus::OnHold); }
+
+void PosWindow::generateCurrentBill(OrderStatus status)
+{
+    if (busy_ || role_ != Role::Cashier) return;
+    auto& view = *currentOrderPage_;
     if (pendingProduct_ || view.hasQuantityDraft()) {
         view.showBillError("Press Enter to apply the quantity, or Escape to cancel it.");
         return;
     }
-    const QScopedValueRollback<bool> saving(savingBill_, true);
-    const Result<Customer> customer = view.readCustomer();
-    if (!customer.success) {
-        view.showBillError(customer.message);
-        return;
-    }
-
-    Payment payment{};
+    const auto customer = view.readCustomer();
+    if (!customer.success) { view.showBillError(customer.message); return; }
+    Payment payment;
+    optional<int64_t> expectedPayable;
     if (status == OrderStatus::Paid) {
-        const Result<Payment> entered = view.readPayment();
-        if (!entered.success) {
-            view.showBillError(entered.message);
-            return;
-        }
+        if (!currentQuote_) { view.showBillError("Review the current payable before saving."); return; }
+        const auto entered = view.readPayment();
+        if (!entered.success) { view.showBillError(entered.message); return; }
         payment = entered.value;
-        payment.recorded = true;
+        expectedPayable = currentQuote_->totals.payable;
     }
-
-    const QDateTime now = QDateTime::currentDateTime();
-    const Timestamp timestamp{now.date().toString("yyyy-MM-dd").toStdString(),
-                              now.time().toString("HH:mm:ss").toStdString()};
-    view.showBillError({});
     view.setBillSaving(true);
-    const Result<SaleRecord> result = resumedOrderId_.empty() ? checkout_.generateBill(cart_.items(), customer.value, payment, status, timestamp) : checkout_.saveHeldOrder(resumedOrderId_, cart_.items(), customer.value, payment, status);
-    if (!result.success) {
-        view.showBillError(result.message);
+    const auto now = currentTimestamp();
+    const auto sale = [&] {
+        const QScopedValueRollback<bool> saving(busy_, true);
+        const auto items = cart_.items();
+        return resumedOrderId_.empty() ?
+            checkout_.generateBill(items, customer.value, payment, status, now, expectedPayable) :
+            checkout_.saveHeldOrder(resumedOrderId_, items, customer.value, payment, status, now, expectedPayable);
+    }();
+    if (!sale.success) {
+        view.showCartError(refreshCart());
+        view.showBillError(sale.message);
         view.setBillSaving(false);
         return;
     }
-
     cart_.clear();
     resumedOrderId_.clear();
     pendingProduct_.reset();
-    view.showBillError({});
+    view.setCheckoutOrder(nullptr);
     view.resetCheckoutFields();
     view.showCartError(refreshCart());
     view.setBillSaving(false);
     if (status == OrderStatus::OnHold) {
-        view.showBillError("Order saved on hold.");
+        view.showBillError(sale.message.empty() ? "Order saved on hold." : sale.message);
         return;
     }
-    if (historyPage_)
-        static_cast<OrderHistoryView*>(historyPage_)->setArchiveView(false);
-    displayOrder(result.value);
+    view.showBillError({});
+    historyPage_->setArchiveView(false);
     showPage("Order History");
+    displayOrder(sale.value);
+    refreshHistory();
+    historyPage_->showError(sale.message);
 }
 
-// loads the saved bill for the selected order id
-void PosWindow::onOrderSelected(const string& orderId) {
-    const Result<SaleRecord> result = history_.get(orderId);
-    if (!result.success) {
+void PosWindow::onOrderSelected(const string& orderId)
+{
+    if (busy_ || !role_) return;
+    const auto result = history_.get(orderId);
+    if (result.success) displayOrder(result.value);
+    else {
         clearOrderSelection();
-        if (historyPage_) {
-            static_cast<OrderHistoryView*>(historyPage_)->showError(result.message);
-        }
-        return;
+        historyPage_->showError(result.message);
     }
-
-    displayOrder(result.value);
 }
 
-void PosWindow::displayOrder(const SaleRecord& order) {
+void PosWindow::displayOrder(const SaleRecord& order)
+{
+    cancelPaidEdit();
     selectedOrderId_ = order.ids.orderId;
     displayedBill_ = order;
-    hasDisplayedBill_ = true;
-    if (historyPage_) {
-        auto& view = *static_cast<OrderHistoryView*>(historyPage_);
-        view.showError({});
-        view.showBill(displayedBill_);
-    }
+    historyPage_->showError({});
+    historyPage_->showBill(order);
+    historyPage_->setArchiveActionsAvailable(pdfRecoveryWarning_.empty());
+    const bool canUsePdf = pdfRecoveryWarning_.empty() && !order.archived && order.status == OrderStatus::Paid;
+    const bool canOpenPdf = canUsePdf && history_.openPdfPath(order.ids.orderId).success;
+    historyPage_->setPdfActions(canUsePdf && !canOpenPdf, canOpenPdf);
+    if (!pdfRecoveryWarning_.empty()) historyPage_->showError(pdfRecoveryWarning_);
 }
 
-void PosWindow::clearOrderSelection() {
+void PosWindow::clearOrderSelection()
+{
+    cancelPaidEdit();
     selectedOrderId_.clear();
-    displayedBill_ = {};
-    hasDisplayedBill_ = false;
-    if (historyPage_) {
-        static_cast<OrderHistoryView*>(historyPage_)->clearBill();
-    }
+    displayedBill_.reset();
+    historyPage_->showError({});
+    historyPage_->clearBill();
 }
 
-// records payment on the selected held order, using the existing bill
-void PosWindow::onMarkPaidClicked() {
-    if (!historyPage_ || !hasDisplayedBill_ || displayedBill_.status != OrderStatus::OnHold) {
+void PosWindow::onPreviewPaidEdit(const string& orderId, const vector<QuantityChange>& changes)
+{
+    if (busy_ || selectedOrderId_ != orderId || !role_) return;
+    cancelPaidEdit();
+    if (changes.empty()) {
+        historyPage_->showError({});
         return;
     }
-
-    auto& view = *static_cast<OrderHistoryView*>(historyPage_);
-    Result<Payment> payment = view.readPayment();
-    if (!payment.success) {
-        view.showError(payment.message);
-        return;
-    }
-
-    payment.value.recorded = true;
-    const Result<SaleRecord> result = history_.markPaid(selectedOrderId_, payment.value);
-    if (!result.success) {
-        view.showError(result.message);
-        return;
-    }
-
-    displayOrder(result.value);
-    refreshHistory();
+    const auto preview = checkout_.previewPaidEdit(orderId, changes, currentTimestamp());
+    if (!preview.success) { historyPage_->showError(preview.message); return; }
+    paidEditDraft_ = preview.value;
+    historyPage_->showError({});
+    historyPage_->showPaidEdit(*paidEditDraft_);
 }
 
-// archives the selected order and clears it from the bill panel state
-void PosWindow::onArchiveClicked() {
-    if (!historyPage_ || selectedOrderId_.empty() ||
-        static_cast<OrderHistoryView*>(historyPage_)->showingArchives()) {
-        return;
-    }
-
-    const Status result = history_.archive(selectedOrderId_);
-    if (!result.success) {
-        if (historyPage_) {
-            static_cast<OrderHistoryView*>(historyPage_)->showError(result.message);
-        }
-        return;
-    }
-
-    clearOrderSelection();
-    if (historyPage_) {
-        refreshHistory();
-    }
-}
-
-void PosWindow::showHistoryTab(bool archived) {
-    if (!historyPage_) return;
-    auto& view = *static_cast<OrderHistoryView*>(historyPage_);
-    if (view.showingArchives() == archived) return;
-    view.setArchiveView(archived);
-    clearOrderSelection();
-    refreshHistory();
-}
-
-void PosWindow::refreshHistory() {
-    auto& view = *static_cast<OrderHistoryView*>(historyPage_);
-    const Result<vector<SaleRecord>> orders = view.showingArchives() ? history_.listArchived() : history_.list();
-    if (!orders.success) {
-        view.showOrders({}, {});
-        clearOrderSelection();
-        view.showError(orders.message);
-        return;
-    }
-
-    view.showError({});
-    view.showOrders(orders.value, selectedOrderId_);
-}
-
-// displays the details and barcode image for the selected catalogue product
-void PosWindow::onProductSelected(const string& productId) {
-    if (!cataloguePage_) {
-        return;
-    }
-
-    auto& view = *static_cast<CatalogueView*>(cataloguePage_);
-    const Result<Product> product = products_.findById(productId);
-    if (!product.success) {
-        selectedCatalogueProduct_.reset();
-        view.clearProduct();
-        view.showError(product.message);
-        return;
-    }
-
-    selectedCatalogueProduct_ = product.value;
-    view.showError({});
-    view.showProduct(*selectedCatalogueProduct_);
-    const auto orders = history_.list();
-    const auto referencesProduct = [&productId](const SaleRecord& order) {
-        return order.status == OrderStatus::OnHold &&
-               std::any_of(order.lines.begin(), order.lines.end(), [&productId](const SaleLine& line) {
-                   return line.productId == productId;
-               });
-    };
-    view.setHeldReference(orders.success &&
-                          std::any_of(orders.value.begin(), orders.value.end(), referencesProduct));
-}
-
-// generates the barcode preview in memory for the add product form
-void PosWindow::onGeneratePreview() {
-    if (!cataloguePage_) {
-        return;
-    }
-
-    auto& view = *static_cast<CatalogueView*>(cataloguePage_);
-    const QImage image = images_.preview(view.readBarcode());
-    view.showBarcodePreview(image);
-    view.showError(image.isNull() ? "Could not generate a preview. Check the barcode." : "");
-}
-
-// sends the new product to the product service and shows what was saved
-void PosWindow::onSaveProduct() {
-    if (!cataloguePage_) {
-        return;
-    }
-
-    auto& view = *static_cast<CatalogueView*>(cataloguePage_);
-    const Result<Product> input = view.readNewProduct();
-    if (!input.success) {
-        view.showError(input.message);
-        return;
-    }
-
-    const Result<Product> saved = products_.create(input.value);
-    if (!saved.success) {
-        view.showError(saved.message);
-        return;
-    }
-
-    refreshCatalogue();
-    view.showSavedProduct(saved.value);
-}
-
-// sends the original product and the edited version to the product service
-void PosWindow::onUpdateProduct() {
-    if (!cataloguePage_ || !selectedCatalogueProduct_) {
-        return;
-    }
-
-    auto& view = *static_cast<CatalogueView*>(cataloguePage_);
-    const Result<Product> replacement = view.readEditedProduct();
-    if (!replacement.success) {
-        view.showError(replacement.message);
-        return;
-    }
-
-    const Result<Product> saved = products_.update(*selectedCatalogueProduct_, replacement.value);
-    if (!saved.success) {
-        view.showError(saved.message);
-        return;
-    }
-
-    onProductSelected(saved.value.id);
-    refreshCatalogue();
-}
-
-// asks the product service to delete the selected catalogue product
-void PosWindow::onDeleteProduct() {
-    if (!cataloguePage_ || !selectedCatalogueProduct_) {
-        return;
-    }
-
-    auto& view = *static_cast<CatalogueView*>(cataloguePage_);
-    const Status removed = products_.remove(selectedCatalogueProduct_->id);
-    if (!removed.success) {
-        view.showError(removed.message);
-        return;
-    }
-
-    selectedCatalogueProduct_.reset();
-    view.clearProduct();
-    refreshCatalogue();
-}
-
-void PosWindow::refreshCatalogue() {
-    auto& view = *static_cast<CatalogueView*>(cataloguePage_);
-    const Result<vector<Product>> products = products_.list();
-    if (!products.success) {
-        view.showError(products.message);
-        return;
-    }
-
-    view.showError({});
-    view.showProducts(products.value, selectedCatalogueProduct_ ? selectedCatalogueProduct_->id : string{});
-}
-
-// switches the page in view and starts or stops the camera when needed
-void PosWindow::showPage(const string& pageName) {
-    if (!pages_) {
-        return;
-    }
-
-    QWidget* page = nullptr;
-    if (pageName == "Current Order") {
-        page = currentOrderPage_;
-    } else if (pageName == "Order History") {
-        page = historyPage_;
-    } else if (pageName == "Product Catalogue") {
-        page = cataloguePage_;
-    }
-
-    if (!page || pages_->indexOf(page) < 0) {
-        return;
-    }
-
-    if (page != currentOrderPage_) {
-        stopCurrentOrderCamera();
-    }
-    pages_->setCurrentWidget(page);
-
-    if (page == currentOrderPage_ && !currentOrderOpened_) {
-        auto& view = *static_cast<CurrentOrderView*>(currentOrderPage_);
-        view.showCartError(refreshCart());
-        currentOrderOpened_ = true;
-        view.showCameraPreview({});
-        cameraStatus_ = scanner_.start(0);
-        if (cameraStatus_.success) {
-            cameraTimer_.start();
-        }
-        view.showScannerMessage(cameraStatus_.message);
-    }
-
-    if (page == historyPage_) {
-        refreshHistory();
-    } else if (page == cataloguePage_) {
-        refreshCatalogue();
-    }
-}
-
-// switches between tabs inside the product catalogue page
-void PosWindow::showCatalogueTab(const string& tabName) {
-    if (!catalogueTabs_) {
-        return;
-    }
-
-    const QString title = QString::fromStdString(tabName);
-    for (int index = 0; index < catalogueTabs_->count(); ++index) {
-        if (catalogueTabs_->tabText(index) == title) {
-            catalogueTabs_->setCurrentIndex(index);
+void PosWindow::onApprovePaidEdit(const string& pin)
+{
+    if (busy_ || !paidEditDraft_ || !role_ || pages_->currentWidget() != historyPage_) return;
+    const auto draft = *paidEditDraft_;
+    busy_ = true;
+    paidEditApproval_.reset();
+    historyPage_->setPaidEditBusy(true);
+    historyPage_->showError("Checking Manager PIN…");
+    access_.approvePaidEdit(pin, draft, [window = QPointer<PosWindow>(this), draft](Result<ManagerApproval> approval) {
+        if (!window) return;
+        window->busy_ = false;
+        auto* historyView = window->historyPage_;
+        historyView->setPaidEditBusy(false);
+        if (window->selectedOrderId_ != draft.orderId || !window->paidEditDraft_ ||
+            window->paidEditDraft_->revision != draft.revision || window->pages_->currentWidget() != historyView) return;
+        if (!approval.success) {
+            historyView->setPaidEditApproved(false);
+            historyView->showError(approval.message);
             return;
         }
+        window->paidEditApproval_ = approval.value;
+        historyView->setPaidEditApproved(true);
+        historyView->showError("Manager approved this adjustment. Confirm settlement after handling the payment.");
+    });
+}
+
+void PosWindow::onCommitPaidEdit(int64_t settledDelta)
+{
+    if (busy_ || !paidEditDraft_ || !paidEditApproval_ || pages_->currentWidget() != historyPage_) return;
+    const auto result = [&] {
+        const QScopedValueRollback<bool> settling(busy_, true);
+        historyPage_->setPaidEditBusy(true);
+        return checkout_.applyPaidEdit(*paidEditDraft_, *paidEditApproval_, settledDelta, currentTimestamp());
+    }();
+    historyPage_->setPaidEditBusy(false);
+    paidEditApproval_.reset();
+    historyPage_->setPaidEditApproved(false);
+    if (!result.success) {
+        historyPage_->showError(result.message + " Reconcile any money already moved before retrying settlement.");
+        return;
+    }
+    displayOrder(result.value);
+    refreshHistory();
+    historyPage_->showError(result.message);
+}
+
+void PosWindow::cancelPaidEdit()
+{
+    if (busy_) return;
+    paidEditDraft_.reset();
+    paidEditApproval_.reset();
+    historyPage_->clearPaidEditApproval();
+}
+
+void PosWindow::onArchiveOrder(const string& orderId)
+{
+    if (busy_ || !displayedBill_ || displayedBill_->archived || selectedOrderId_ != orderId ||
+        !pdfRecoveryWarning_.empty()) return;
+    if (displayedBill_->status == OrderStatus::Paid &&
+        QMessageBox::question(this, "Archive Paid Bill",
+            "Archive this bill and remove its saved PDF? A restored bill can generate a new PDF.") != QMessageBox::Yes) return;
+    const auto result = history_.archive(orderId);
+    if (!result.success) { historyPage_->showError(result.message); return; }
+    clearOrderSelection();
+    refreshHistory();
+    if (!result.message.empty()) historyPage_->showError(result.message);
+}
+
+void PosWindow::onUnarchiveOrder(const string& orderId)
+{
+    if (busy_ || !displayedBill_ || !displayedBill_->archived || selectedOrderId_ != orderId ||
+        !pdfRecoveryWarning_.empty()) return;
+    const auto shortages = history_.unarchiveShortages(orderId);
+    if (!shortages.success) { historyPage_->showError(shortages.message); return; }
+    if (!shortages.value.empty()) { historyPage_->showUnarchiveShortages(shortages.value); return; }
+    const auto result = history_.unarchive(orderId);
+    if (!result.success) { historyPage_->showError(result.message); return; }
+    historyPage_->setArchiveView(false);
+    onOrderSelected(orderId);
+    refreshHistory();
+    if (!result.message.empty()) historyPage_->showError(result.message);
+}
+
+void PosWindow::onGeneratePdf(const string& orderId)
+{
+    if (busy_ || selectedOrderId_ != orderId || !pdfRecoveryWarning_.empty()) return;
+    const auto result = history_.generatePdf(orderId);
+    if (result.success) displayOrder(result.value);
+    historyPage_->showError(result.message);
+}
+
+void PosWindow::onOpenPdf(const string& orderId)
+{
+    if (busy_ || selectedOrderId_ != orderId || !pdfRecoveryWarning_.empty()) return;
+    const auto result = history_.openPdfPath(orderId);
+    if (!result.success) {
+        onOrderSelected(orderId);
+        historyPage_->showError(result.message);
+        return;
+    }
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(text(result.value.u8string()))))
+        historyPage_->showError("Could not open the saved bill PDF.");
+}
+
+void PosWindow::onGenerateReport(const ReportRequest& request)
+{
+    if (busy_ || role_ != Role::Manager) return;
+    const auto report = reports_.generate(request);
+    if (report.success) reportsPage_->showResult(report.value);
+    else reportsPage_->showError(report.message);
+}
+
+void PosWindow::showHistoryTab(bool archived)
+{
+    if (busy_ || !role_ || historyPage_->showingArchives() == archived) return;
+    historyPage_->setArchiveView(archived);
+    clearOrderSelection();
+    refreshHistory();
+}
+
+void PosWindow::refreshHistory()
+{
+    const auto orders = historyPage_->showingArchives() ? history_.listArchived() : history_.list();
+    if (orders.success) {
+        historyPage_->showOrders(orders.value, selectedOrderId_);
+        return;
+    }
+    historyPage_->showOrders({}, {});
+    clearOrderSelection();
+    historyPage_->showError(orders.message);
+}
+
+void PosWindow::showPage(const string& pageName)
+{
+    if (busy_ || !role_) return;
+    const auto destination = std::find(pageNames.begin(), pageNames.end(), pageName);
+    if (destination == pageNames.end()) return;
+    const int index = static_cast<int>(std::distance(pageNames.begin(), destination));
+    if ((*role_ == Role::Cashier && index > 1) || (*role_ == Role::Manager && index == 0)) return;
+    const bool fromHistory = pages_->currentWidget() == historyPage_;
+    auto* page = pages_->widget(index);
+    if (fromHistory && page != historyPage_) clearOrderSelection();
+    if (page != currentOrderPage_) stopCurrentOrderCamera();
+    pages_->setCurrentIndex(index);
+    updateNavigation();
+
+    if (page == currentOrderPage_ && !currentOrderOpened_) {
+        currentOrderPage_->showCartError(refreshCart());
+        currentOrderPage_->showCameraPreview({});
+        const auto camera = scanner_.start(0);
+        currentOrderOpened_ = camera.success;
+        if (camera.success) cameraTimer_.start();
+        currentOrderPage_->showScannerMessage(camera.message);
+    } else if (page == historyPage_) {
+        refreshHistory();
+        if (!pdfRecoveryWarning_.empty()) historyPage_->showError(pdfRecoveryWarning_);
+    } else if (page == cataloguePage_) {
+        cataloguePage_->refresh();
     }
 }
 
-// stops the timer and releases the camera when leaving Current Order
-void PosWindow::stopCurrentOrderCamera() {
-    if (!currentOrderOpened_) {
-        return;
-    }
+void PosWindow::setPdfRecoveryWarning(const string& message)
+{
+    pdfRecoveryWarning_ = message;
+    historyPage_->setArchiveActionsAvailable(message.empty());
+    if (!message.empty()) historyPage_->setPdfActions(false, false);
+}
 
+void PosWindow::stopCurrentOrderCamera()
+{
+    if (!currentOrderOpened_) return;
     cameraTimer_.stop();
     scanner_.stop();
     currentOrderOpened_ = false;
 }
 
-// closing the window has to release the camera too
-void PosWindow::closeEvent(QCloseEvent* event) {
+void PosWindow::closeEvent(QCloseEvent* event)
+{
     QMainWindow::closeEvent(event);
-    if (event->isAccepted()) {
-        stopCurrentOrderCamera();
-    }
+    if (event->isAccepted()) stopCurrentOrderCamera();
 }
