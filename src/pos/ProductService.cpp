@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 using namespace std;
@@ -413,7 +414,8 @@ Result<ProductStock> ProductService::findWithStockByBarcode(
 
 /**
  * @brief Checks all requested sale lines against live stock and returns any shortages.
- * A missing product or changed unit produces a named shortage with zero available.
+ * Aggregates duplicate product lines and produces a named shortage with zero available
+ * for missing products or changed units.
  */
 Result<vector<StockShortage>> ProductService::shortages(
     const StoreData& data,
@@ -421,26 +423,39 @@ Result<vector<StockShortage>> ProductService::shortages(
     const string& excludeHeldOrderId) const {
 
     vector<StockShortage> shortageList;
+    unordered_map<string, int64_t> aggregatedQty;
+    unordered_map<string, const SaleLine*> firstLine;
+    vector<string> order;
 
     for (const auto& line : requested) {
         if (line.quantity <= 0) {
             continue;
         }
+        if (aggregatedQty.find(line.productId) == aggregatedQty.end()) {
+            order.push_back(line.productId);
+            firstLine[line.productId] = &line;
+        }
+        aggregatedQty[line.productId] += line.quantity;
+    }
+
+    for (const auto& prodId : order) {
+        const SaleLine& line = *firstLine[prodId];
+        int64_t totalRequired = aggregatedQty[prodId];
 
         auto prodIt = find_if(data.products.begin(), data.products.end(),
-            [&](const Product& p) { return p.id == line.productId; });
+            [&](const Product& p) { return p.id == prodId; });
 
         if (prodIt == data.products.end() || prodIt->unit != line.unit) {
             string displayName = !line.name.empty() ? line.name : line.acronym;
-            shortageList.push_back({ line.productId, displayName, line.unit, line.quantity, 0 });
+            shortageList.push_back({ prodId, displayName, line.unit, totalRequired, 0 });
             continue;
         }
 
         Result<StockPosition> posResult = stockPosition(data, prodIt->id, excludeHeldOrderId);
         int64_t available = posResult.success ? posResult.value.available : 0;
 
-        if (available < line.quantity) {
-            shortageList.push_back({ prodIt->id, prodIt->name, prodIt->unit, line.quantity, available });
+        if (available < totalRequired) {
+            shortageList.push_back({ prodIt->id, prodIt->name, prodIt->unit, totalRequired, available });
         }
     }
 
