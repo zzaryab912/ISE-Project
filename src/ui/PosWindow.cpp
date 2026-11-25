@@ -1485,6 +1485,7 @@ private:
     struct EditRow {
         SaleLine line;
         QLineEdit* quantity = nullptr;
+        QLabel* restockLabel = nullptr;
         QLineEdit* restock = nullptr;
     };
 
@@ -1537,7 +1538,10 @@ private:
         for (const auto& row : editRows_) {
             row.quantity->setEnabled(!editBusy_);
             const auto quantity = quantityInput(row.quantity->text(), row.line.unit);
-            row.restock->setEnabled(!editBusy_ && quantity.success && quantity.value < row.line.quantity);
+            const bool reduction = quantity.success && quantity.value < row.line.quantity;
+            row.restockLabel->setVisible(reduction);
+            row.restock->setVisible(reduction);
+            row.restock->setEnabled(!editBusy_);
         }
         pin_->setEnabled(previewValid_ && !approved_ && !editBusy_);
         approve_->setEnabled(previewValid_ && !approved_ && !editBusy_);
@@ -1599,16 +1603,16 @@ private:
             restock->setAccessibleName("Restock quantity for " + text(line.name));
             quantity->setValidator(new QRegularExpressionValidator(quantityPattern(line.unit), quantity));
             restock->setValidator(new QRegularExpressionValidator(quantityPattern(line.unit), restock));
-            restock->setEnabled(false);
+            auto* restockLabel = new QLabel("Restock");
             inputs->addWidget(new QLabel("New qty"));
             inputs->addWidget(quantity);
-            inputs->addWidget(new QLabel("Restock"));
+            inputs->addWidget(restockLabel);
             inputs->addWidget(restock);
             auto* label = new QLabel(text(line.name) + "\n" + quantityText(line.quantity, line.unit) + " " + unitShort(line.unit));
             label->setTextFormat(Qt::PlainText);
             label->setWordWrap(true);
             form->addRow(label, fields);
-            editRows_.push_back({line, quantity, restock});
+            editRows_.push_back({line, quantity, restockLabel, restock});
             connect(quantity, &QLineEdit::textEdited, this, [this] { changePreview(); });
             connect(restock, &QLineEdit::textEdited, this, [this] { changePreview(); });
         }

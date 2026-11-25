@@ -24,6 +24,8 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
+#include <limits>
+
 using namespace std;
 
 namespace {
