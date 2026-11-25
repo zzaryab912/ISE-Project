@@ -3,92 +3,150 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace std;
 
-// -------------------------------------------------------------------------------
-// enums
-
-
-enum class Unit {               // Units can either be Count or Weight
+enum class Unit {
     Count,
     Weight
 };
 
-enum class OrderStatus {        // every possible order status
+enum class OrderStatus {
     InProgress,
     OnHold,
-    Paid,
-    Archived
+    Paid
 };
 
-enum class PaymentMode {        // all different payment modes
+enum class BillChange {
+    Unchanged,
+    Modified,
+    CompleteRefund
+};
+
+enum class PaymentMode {
     Cash,
     Card,
     Wallet
 };
 
-// -------------------------------------------------------------------------------
-// Structs / Classes
+enum class Role {
+    Cashier,
+    Manager
+};
 
-struct Status {                 // used when a value is not needed
+enum class ReportKind {
+    Incomplete,
+    Completed,
+    CashSales,
+    AllSales,
+    PaymentMix,
+    TopSold,
+    HighestStock,
+    LowestStock
+};
+
+enum class ReportPeriod {
+    Day,
+    Week,
+    Month,
+    Year,
+    AllTime,
+    Custom
+};
+
+struct Status {
     bool success = false;
-    string message {};          // the {} initializes the string as an empty string here
-};
-
-template <typename T>           // used when a value is also needed along with information
-struct Result {                 // or an object in some cases. T value {}; initializes that object with default values
-    bool success=false;
     string message {};
-    T value {};                 // initializes value to default value depending on data type
 };
 
+template <typename T>
+struct Result {
+    bool success = false;
+    string message {};
+    T value {};
+};
+
+struct Timestamp {
+    string date {};
+    string time {};
+    int64_t epochSeconds = 0;
+};
+
+struct Category {
+    string id {};
+    string name {};
+    string acronym {};
+};
+
+// Money is stored in paisa, quantities in thousandths, and rates in basis points.
 struct Product {
     string id {};
     string barcode {};
+    string categoryId {};
     string acronym {};
     string name {};
-
-    Unit unit = Unit::Count;        // object of Unit created, with Count as the unit
-    int64_t unitPrice = 0;          // initializing the unit price
-    int64_t taxPerUnit = 0;         // initializing tax per unit
+    Unit unit = Unit::Count;
+    int64_t unitPrice = 0;
+    int32_t taxRate = 0;
     int64_t discountPerUnit = 0;
-    int64_t available=0;            // every product has availability status, this represents the quantity. Two strikes with one stone.
-    string barcodeImagePath{};      // every product needs a barcode image path as well. 
-                                    // these values are generated in 64 bits. 
-                                    // a little (very) extravagant yes, but allows for greater range 
+    int64_t onHand = 0;
+    string barcodeImagePath {};
 };
 
-struct CartItem {                   // product added to cart (has its own quatity) is a CartItem
+struct StockPosition {
+    int64_t onHand = 0;
+    int64_t reserved = 0;
+    int64_t available = 0;
+};
+
+struct ProductStock {
+    Product product {};
+    StockPosition stock {};
+};
+
+struct StockShortage {
+    string productId {};
+    string name {};
+    Unit unit = Unit::Count;
+    int64_t required = 0;
+    int64_t available = 0;
+};
+
+struct Season {
+    string startDate {};
+    string endDate {};
+    int32_t rate = 0;
+    bool active = false;
+};
+
+struct SpecialDiscount {
+    int32_t rate = 0;
+    bool active = false;
+};
+
+struct PricingTerms {
+    int32_t seasonalRate = 0;
+    int32_t specialRate = 0;
+};
+
+struct CartItem {
     Product product {};
     int64_t quantity = 0;
 };
 
-struct Totals {                     // keep in mind, all these values are stored in paisas
-    int64_t subtotal=0;             // 100 paisa equals one rupee
-    int64_t tax=0;
-    int64_t discount = 0;
-    int64_t payable =0;             // SaleRecord contains a Totals object as a field. This keeps the amounts together in a bill
-};
-
-                                    // totals is also used as a return value, for PricingCalculator, CartService, and Result
-                                    
 struct Customer {
     string name {};
     string contact {};
 };
 
-struct Payment {                    // stores whether a payment has been recorded, its amount, PaymentMode (enum) and the merchant name
+struct Payment {
     bool recorded = false;
-    int64_t amount = 0;
+    int64_t amountReceived = 0;
+    int64_t changeReturned = 0;
     PaymentMode mode = PaymentMode::Cash;
     string merchant {};
-};
-    
-struct Timestamp {                  // stored in SaleRecord, used by generateBill and saleIds uses the date when generating IDs
-    string date {};
-    string time {};
 };
 
 struct SaleIds {
@@ -96,40 +154,171 @@ struct SaleIds {
     string billId {};
 };
 
-struct SaleLine {                   // saleline is one purchased product. 
-    string productId {};            // each purchased product uses the following data members
+struct SaleLine {
+    string productId {};
     string barcode {};
     string acronym {};
-    int64_t unitPrice =0;
-    int64_t discountPerUnit=0;
-    int64_t quantity =0;
-    std::optional<std::int64_t> taxPerUnit {};
+    string name {};
+    Unit unit = Unit::Count;
+    int64_t unitPrice = 0;
+    int32_t taxRate = 0;
+    int64_t discountPerUnit = 0;
+    int64_t quantity = 0;
+    int64_t lineProductDiscount = 0;
+    int64_t lineTax = 0;
 };
 
-struct SaleRecord {
-    SaleIds ids {};                                 // has an orderId and a billId
-    Timestamp timestamp {};                         // every sale needs a timestamp
-    Customer customer {};
-    Payment payment {};
-    OrderStatus status = OrderStatus::InProgress;
-    vector<SaleLine> lines {};                      // helps accommodate lots of SaleLines (purchased products) 
+struct Totals {
+    int64_t subtotal = 0;
+    int64_t productDiscount = 0;
+    int64_t seasonalDiscount = 0;
+    int64_t specialDiscount = 0;
+    int64_t tax = 0;
+    int64_t roundingAdjustment = 0;
+    int64_t payable = 0;
+};
+
+struct PricingResult {
+    vector<SaleLine> lines {};
+    vector<int64_t> lineSubtotals {};
+    PricingTerms terms {};
     Totals totals {};
 };
 
+struct QuantityChange {
+    string productId {};
+    int64_t quantity = 0;
+    int64_t restockQuantity = 0;
+};
+
+struct LineAdjustment {
+    string productId {};
+    int64_t previousQuantity = 0;
+    int64_t quantity = 0;
+    int64_t restockQuantity = 0;
+};
+
+struct BillAdjustment {
+    uint32_t revision = 0;
+    Timestamp at {};
+    int64_t amountDelta = 0;
+    int64_t productDiscountDelta = 0;
+    int64_t seasonalDiscountDelta = 0;
+    int64_t specialDiscountDelta = 0;
+    vector<LineAdjustment> lines {};
+};
+
+struct SaleRecord {
+    SaleIds ids {};
+    Timestamp createdAt {};
+    optional<Timestamp> paidAt {};
+    Customer customer {};
+    Payment payment {};
+    OrderStatus status = OrderStatus::InProgress;
+    bool archived = false;
+    BillChange billChange = BillChange::Unchanged;
+    uint32_t revision = 0;
+    vector<SaleLine> lines {};
+    PricingTerms terms {};
+    Totals totals {};
+    vector<BillAdjustment> adjustments {};
+    string pdfPath {};
+};
+
 struct HeldCheckout {
-    SaleRecord sale;
-    std::vector<CartItem> items;
-    bool usesLegacyTax = false;
+    SaleRecord sale {};
+    vector<CartItem> items {};
+};
+
+struct PaidEditDraft {
+    string orderId {};
+    uint32_t revision = 0;
+    vector<QuantityChange> changes {};
+    Totals before {};
+    Totals after {};
+    int64_t amountDelta = 0;
+};
+
+class ManagerPinService;
+class CheckoutService;
+
+class ManagerApproval {
+public:
+    ManagerApproval() = default;
+
+private:
+    optional<PaidEditDraft> draft_ {};
+
+    friend class ManagerPinService;
+    friend class CheckoutService;
 };
 
 struct StoreData {
-    vector <Product> products {};
+    vector<Category> categories {};
+    vector<Product> products {};
+    vector<Season> seasons {};
+    SpecialDiscount specialDiscount {};
+    vector<string> issuedBarcodes {};
     vector<SaleRecord> sales {};
 };
 
-// Store Data is the shared container for the two main collections: product catalogue and saved sales
-// vector<Product> products is a list of all products, and each has their own data
-// SaleRecord sales is for the past sales.
+struct ReportRequest {
+    ReportKind kind = ReportKind::Incomplete;
+    ReportPeriod period = ReportPeriod::Day;
+    string anchorDate {};
+    string startDate {};
+    string endDate {};
+    vector<PaymentMode> modes {};
+    optional<Unit> unit {};
+};
 
+struct ReservationReportRow {
+    string productId {};
+    string name {};
+    Unit unit = Unit::Count;
+    int64_t quantity = 0;
+    StockPosition stock {};
+};
 
+struct OrderReportRow {
+    SaleIds ids {};
+    string customerName {};
+    Timestamp at {};
+    OrderStatus status = OrderStatus::InProgress;
+    BillChange billChange = BillChange::Unchanged;
+    optional<PaymentMode> mode {};
+    Totals totals {};
+    int64_t collected = 0;
+    int64_t refunded = 0;
+    vector<ReservationReportRow> reservations {};
+};
 
+struct ProductReportRow {
+    string productId {};
+    string name {};
+    Unit unit = Unit::Count;
+    int64_t quantitySold = 0;
+    optional<Unit> stockUnit {};
+    optional<StockPosition> stock {};
+};
+
+struct PaymentMixRow {
+    PaymentMode mode = PaymentMode::Cash;
+    uint64_t count = 0;
+    int32_t shareBasisPoints = 0;
+};
+
+struct ReportResult {
+    string startDate {};
+    string endDate {};
+    vector<OrderReportRow> orders {};
+    vector<ProductReportRow> products {};
+    vector<PaymentMixRow> paymentMix {};
+    int64_t billTotal = 0;
+    int64_t collected = 0;
+    int64_t refunded = 0;
+    int64_t netCollections = 0;
+    int64_t totalDiscount = 0;
+    uint64_t refundCount = 0;
+    uint64_t outOfStockCount = 0;
+};
