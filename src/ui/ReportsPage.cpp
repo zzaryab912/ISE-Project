@@ -79,9 +79,11 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
         QLabel { color: #272727; font-size: 14px; background: transparent; }
         QLabel#reportHeading { font-size: 36px; font-weight: 500; }
         QLabel#reportTitle { font-size: 20px; font-weight: 600; }
+        QLabel#reportFigure { font-size: 19px; font-weight: 600; }
         QLabel#reportSubtle { color: #646464; }
         QLabel#reportError { color: #a22922; }
         QFrame#reportCard { background: white; border: 1px solid #e3e3e3; border-radius: 21px; }
+        QFrame#reportTile { background: #f6f6f6; border: 1px solid #ebebeb; border-radius: 10px; }
         QComboBox, QDateEdit { min-height: 36px; padding: 0 10px; background: white;
             border: 1px solid #d4d4d4; border-radius: 8px; color: #252525; }
         QComboBox:focus, QDateEdit:focus { border: 1px solid #252525; }
@@ -97,11 +99,16 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
 
     auto* page = new QVBoxLayout(this);
     page->setContentsMargins(0, 0, 0, 0);
-    page->setSpacing(12);
-    page->addWidget(reportLabel("Reports", "reportHeading"));
+    page->setSpacing(0);
+    auto* heading = reportLabel("Reports", "reportHeading");
+    heading->setFixedHeight(43);
+    page->addWidget(heading);
+    page->addSpacing(3);
     page->addWidget(reportLabel("Choose a report and its options before generating it.", "reportSubtle"));
+    page->addSpacing(19);
 
     auto* options = reportCard();
+    options->setMinimumHeight(247);
     auto* optionLayout = new QVBoxLayout(options);
     optionLayout->setContentsMargins(24, 19, 24, 19);
     optionLayout->addWidget(reportLabel("Report options", "reportTitle"));
@@ -165,6 +172,7 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     run->setObjectName("generateReport");
     optionLayout->addWidget(run, 0, Qt::AlignRight);
     page->addWidget(options);
+    page->addSpacing(24);
 
     auto* output = reportCard();
     auto* outputLayout = new QVBoxLayout(output);
@@ -173,6 +181,23 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     summary_ = reportLabel("Choose your options, then select Generate Report.", "reportSubtle");
     feedback_ = reportLabel({}, "reportError");
     feedback_->hide();
+    saleTotals_ = new QWidget;
+    auto* totalsLayout = new QHBoxLayout(saleTotals_);
+    totalsLayout->setContentsMargins(0, 4, 0, 8);
+    const array<const char*, 4> totalTitles = {"Gross sales", "Total discounts", "Refunds", "Net collections"};
+    for (size_t i = 0; i < totalTitles.size(); ++i) {
+        auto* tile = new QFrame;
+        tile->setObjectName("reportTile");
+        auto* tileLayout = new QVBoxLayout(tile);
+        tileLayout->setContentsMargins(15, 9, 15, 9);
+        auto* title = reportLabel(totalTitles[i], "reportSubtle");
+        if (i == 2) refundTitle_ = title;
+        tileLayout->addWidget(title);
+        totalValues_[i] = reportLabel({}, "reportFigure");
+        tileLayout->addWidget(totalValues_[i]);
+        totalsLayout->addWidget(tile, 1);
+    }
+    saleTotals_->hide();
     table_ = new QTableWidget;
     table_->setAccessibleName("Report output");
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -184,6 +209,7 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     outputLayout->addWidget(title_);
     outputLayout->addWidget(summary_);
     outputLayout->addWidget(feedback_);
+    outputLayout->addWidget(saleTotals_);
     outputLayout->addWidget(table_, 1);
     page->addWidget(output, 1);
 
@@ -193,6 +219,7 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
         title_->setText("No report generated");
         summary_->setText("Choose your options, then select Generate Report.");
         feedback_->hide();
+        saleTotals_->hide();
         table_->hide();
     });
     connect(period_, &QComboBox::currentIndexChanged, this, [this] {
@@ -262,6 +289,7 @@ void ReportsPage::showResult(const ReportResult& report)
 {
     displayed_ = report;
     feedback_->hide();
+    saleTotals_->hide();
     title_->setText(kind_->currentText());
     const QString dateRange = report.startDate.empty() ? QString() :
         QString::fromStdString(report.startDate + "  –  " + report.endDate) + "    ·    ";
@@ -316,10 +344,21 @@ void ReportsPage::showResult(const ReportResult& report)
     if (kind == ReportKind::Incomplete) totals = "Unpaid bills  " + amount(report.billTotal);
     else if (kind == ReportKind::HighestStock || kind == ReportKind::LowestStock)
         totals = "Out of stock  " + QString::number(report.outOfStockCount);
-    else if (kind != ReportKind::PaymentMix && kind != ReportKind::TopSold)
-        totals = "Gross sales  " + amount(report.billTotal) + "    ·    Discounts  " + amount(report.totalDiscount) +
-            "    ·    Refunds (" + QString::number(report.refundCount) + ")  " + amount(report.refunded) +
-            "    ·    Net collections  " + amount(report.netCollections);
+    else if (kind != ReportKind::PaymentMix && kind != ReportKind::TopSold) {
+        const array<int64_t, 4> figures{report.billTotal, report.totalDiscount, report.refunded, report.netCollections};
+        for (size_t i = 0; i < figures.size(); ++i) totalValues_[i]->setText(amount(figures[i]));
+        refundTitle_->setText("Refunds (" + QString::number(report.refundCount) + ")");
+        saleTotals_->show();
+        QStringList methods;
+        if (kind == ReportKind::CashSales) {
+            methods << "Cash";
+        } else {
+            for (size_t i = 0; i < modeChecks_.size(); ++i) {
+                if (modeChecks_[i]->isChecked()) methods << paymentNames[i];
+            }
+        }
+        totals = methods.join(", ");
+    }
     summary_->setText(totals.isEmpty() ? "Archived bills are excluded." : dateRange + totals);
     table_->show();
     table_->resizeRowsToContents();
@@ -332,6 +371,7 @@ void ReportsPage::showError(const string& message)
     summary_->clear();
     feedback_->setText(QString::fromStdString(message));
     feedback_->show();
+    saleTotals_->hide();
     table_->hide();
 }
 

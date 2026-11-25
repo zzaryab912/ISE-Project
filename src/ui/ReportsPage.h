@@ -29,8 +29,11 @@ private:
     QLabel* title_ = nullptr;
     QLabel* summary_ = nullptr;
     QLabel* feedback_ = nullptr;
+    QWidget* saleTotals_ = nullptr;
     QTableWidget* table_ = nullptr;
     array<QCheckBox*, 3> modeChecks_{};
+    array<QLabel*, 4> totalValues_{};
+    QLabel* refundTitle_ = nullptr;
     function<void(const ReportRequest&)> generate_;
 
     void updateFilters();
