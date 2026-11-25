@@ -827,6 +827,9 @@ public:
         count_ = label(order, {28, 56, 600, 16}, {}, 13, muted);
         auto* held = action(order, {750, 24, 220, 38}, "Held Orders", Action::Secondary);
         connect(held, &QPushButton::clicked, &window, &PosWindow::onHeldOrdersClicked);
+        discardResume_ = action(order, {510, 24, 224, 38}, "Discard Resumed Draft", Action::Secondary);
+        connect(discardResume_, &QPushButton::clicked, &window, &PosWindow::onDiscardResumedOrder);
+        discardResume_->hide();
         const QStringList captions{"Bill ID", "Order ID", "Status"};
         const QStringList values{"—", "—", "In progress"};
         for (int i = 0; i < captions.size(); ++i) {
@@ -1073,6 +1076,7 @@ public:
         orderIdentity_[0]->setText(sale ? text(sale->ids.billId) : "—");
         orderIdentity_[1]->setText(sale ? text(sale->ids.orderId) : "—");
         orderIdentity_[2]->setText(sale ? "Resumed from hold" : "In progress");
+        discardResume_->setVisible(sale != nullptr);
     }
     bool hasDraft() const override { return !name_->text().isEmpty() || !contact_->text().isEmpty() || payment_->hasDraft() || !drafts_.empty(); }
     bool hasQuantityDraft() const override { return !drafts_.empty(); }
@@ -1123,6 +1127,7 @@ private:
     QLineEdit* contact_ = nullptr;
     QPushButton* pay_ = nullptr;
     QPushButton* hold_ = nullptr;
+    QPushButton* discardResume_ = nullptr;
     std::unique_ptr<PaymentFields> payment_;
     bool hasPreview_ = false;
     bool canBill_ = false;
@@ -1200,8 +1205,11 @@ public:
         rule(list, 24, 88, 602);
         orders_ = viewport(list, {16, 105, 618, 707});
         auto* bill = panel(this, {674, 118, 828, 840});
-        bill_ = viewport(bill, {0, 0, 820, 700});
-        error_ = label(bill, {28, 706, 772, 56}, {}, 14, errorInk);
+        bill_ = viewport(bill, {0, 0, 820, 677});
+        recoveryWarning_ = label(bill, {28, 682, 772, 34}, {}, 13, "#806017");
+        recoveryWarning_->setWordWrap(true);
+        recoveryWarning_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        error_ = label(bill, {28, 719, 772, 45}, {}, 14, errorInk);
         error_->setAlignment(Qt::AlignLeft | Qt::AlignTop);
         error_->setWordWrap(true);
         archive_ = action(bill, {28, 773, 145, 42}, "Archive Order", Action::Secondary, true);
@@ -1241,8 +1249,22 @@ public:
 
     void showError(const string& message) override
     {
+        error_->setStyleSheet(QString("color:%1; background:transparent;").arg(errorInk));
         error_->setText(text(message));
         error_->setToolTip(text(message));
+    }
+
+    void showNotice(const string& message) override
+    {
+        error_->setStyleSheet(QString("color:%1; background:transparent;").arg(detailMuted));
+        error_->setText(text(message));
+        error_->setToolTip(text(message));
+    }
+
+    void showPdfRecoveryWarning(const string& message) override
+    {
+        recoveryWarning_->setText(text(message));
+        recoveryWarning_->setToolTip(text(message));
     }
 
     void showOrders(const vector<SaleRecord>& orders, const string& selectedId) override
@@ -1498,6 +1520,7 @@ private:
     QLabel* listTitle_ = nullptr;
     QScrollArea* orders_ = nullptr;
     QScrollArea* bill_ = nullptr;
+    QLabel* recoveryWarning_ = nullptr;
     QLabel* error_ = nullptr;
     QPushButton* archive_ = nullptr;
     QPushButton* pdf_ = nullptr;
@@ -2240,6 +2263,27 @@ void PosWindow::onGenerateBillClicked() { generateCurrentBill(OrderStatus::Paid)
 
 void PosWindow::onGenerateAndHoldClicked() { generateCurrentBill(OrderStatus::OnHold); }
 
+void PosWindow::onDiscardResumedOrder()
+{
+    if (busy_ || resumedOrderId_.empty() || role_ != Role::Cashier) return;
+    const QScopedValueRollback<bool> confirming(busy_, true);
+    if (QMessageBox::question(this, "Discard Resumed Draft",
+        "Discard unsaved changes and return to an empty order? The saved order is kept in History.",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+    clearCurrentOrder();
+    currentOrderPage_->showBillError({});
+}
+
+void PosWindow::clearCurrentOrder()
+{
+    cart_.clear();
+    resumedOrderId_.clear();
+    pendingProduct_.reset();
+    currentOrderPage_->setCheckoutOrder(nullptr);
+    currentOrderPage_->resetCheckoutFields();
+    currentOrderPage_->showCartError(refreshCart());
+}
+
 void PosWindow::generateCurrentBill(OrderStatus status)
 {
     if (busy_ || role_ != Role::Cashier) return;
@@ -2274,12 +2318,7 @@ void PosWindow::generateCurrentBill(OrderStatus status)
         view.setBillSaving(false);
         return;
     }
-    cart_.clear();
-    resumedOrderId_.clear();
-    pendingProduct_.reset();
-    view.setCheckoutOrder(nullptr);
-    view.resetCheckoutFields();
-    view.showCartError(refreshCart());
+    clearCurrentOrder();
     view.setBillSaving(false);
     if (status == OrderStatus::OnHold) {
         view.showBillError(sale.message.empty() ? "Order saved on hold." : sale.message);
@@ -2290,7 +2329,7 @@ void PosWindow::generateCurrentBill(OrderStatus status)
     showPage("Order History");
     displayOrder(sale.value);
     refreshHistory();
-    historyPage_->showError(sale.message);
+    historyPage_->showNotice(sale.message);
 }
 
 void PosWindow::onOrderSelected(const string& orderId)
@@ -2315,7 +2354,6 @@ void PosWindow::displayOrder(const SaleRecord& order)
     const bool canUsePdf = pdfRecoveryWarning_.empty() && !order.archived && order.status == OrderStatus::Paid;
     const bool canOpenPdf = canUsePdf && history_.openPdfPath(order.ids.orderId).success;
     historyPage_->setPdfActions(canUsePdf && !canOpenPdf, canOpenPdf);
-    if (!pdfRecoveryWarning_.empty()) historyPage_->showError(pdfRecoveryWarning_);
 }
 
 void PosWindow::clearOrderSelection()
@@ -2349,7 +2387,7 @@ void PosWindow::onApprovePaidEdit(const string& pin)
     busy_ = true;
     paidEditApproval_.reset();
     historyPage_->setPaidEditBusy(true);
-    historyPage_->showError("Checking Manager PIN…");
+    historyPage_->showNotice("Checking Manager PIN…");
     access_.approvePaidEdit(pin, draft, [window = QPointer<PosWindow>(this), draft](Result<ManagerApproval> approval) {
         if (!window) return;
         window->busy_ = false;
@@ -2364,7 +2402,7 @@ void PosWindow::onApprovePaidEdit(const string& pin)
         }
         window->paidEditApproval_ = approval.value;
         historyView->setPaidEditApproved(true);
-        historyView->showError("Manager approved this adjustment. Confirm settlement after handling the payment.");
+        historyView->showNotice("Manager approved this adjustment. Confirm settlement after handling the payment.");
     });
 }
 
@@ -2385,7 +2423,7 @@ void PosWindow::onCommitPaidEdit(int64_t settledDelta)
     }
     displayOrder(result.value);
     refreshHistory();
-    historyPage_->showError(result.message);
+    historyPage_->showNotice(result.message);
 }
 
 void PosWindow::cancelPaidEdit()
@@ -2407,7 +2445,7 @@ void PosWindow::onArchiveOrder(const string& orderId)
     if (!result.success) { historyPage_->showError(result.message); return; }
     clearOrderSelection();
     refreshHistory();
-    if (!result.message.empty()) historyPage_->showError(result.message);
+    if (!result.message.empty()) historyPage_->showNotice(result.message);
 }
 
 void PosWindow::onUnarchiveOrder(const string& orderId)
@@ -2422,15 +2460,19 @@ void PosWindow::onUnarchiveOrder(const string& orderId)
     historyPage_->setArchiveView(false);
     onOrderSelected(orderId);
     refreshHistory();
-    if (!result.message.empty()) historyPage_->showError(result.message);
+    if (!result.message.empty()) historyPage_->showNotice(result.message);
 }
 
 void PosWindow::onGeneratePdf(const string& orderId)
 {
     if (busy_ || selectedOrderId_ != orderId || !pdfRecoveryWarning_.empty()) return;
     const auto result = history_.generatePdf(orderId);
-    if (result.success) displayOrder(result.value);
-    historyPage_->showError(result.message);
+    if (result.success) {
+        displayOrder(result.value);
+        historyPage_->showNotice(result.message);
+    } else {
+        historyPage_->showError(result.message);
+    }
 }
 
 void PosWindow::onOpenPdf(const string& orderId)
@@ -2497,7 +2539,6 @@ void PosWindow::showPage(const string& pageName)
         currentOrderPage_->showScannerMessage(camera.message);
     } else if (page == historyPage_) {
         refreshHistory();
-        if (!pdfRecoveryWarning_.empty()) historyPage_->showError(pdfRecoveryWarning_);
     } else if (page == cataloguePage_) {
         cataloguePage_->refresh();
     }
@@ -2506,6 +2547,7 @@ void PosWindow::showPage(const string& pageName)
 void PosWindow::setPdfRecoveryWarning(const string& message)
 {
     pdfRecoveryWarning_ = message;
+    historyPage_->showPdfRecoveryWarning(message);
     historyPage_->setArchiveActionsAvailable(message.empty());
     if (!message.empty()) historyPage_->setPdfActions(false, false);
 }

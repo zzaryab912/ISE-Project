@@ -52,6 +52,8 @@ public:
         virtual bool showingArchives() const = 0;
         virtual void setArchiveView(bool archived) = 0;
         virtual void showError(const string& message) = 0;
+        virtual void showNotice(const string& message) = 0;
+        virtual void showPdfRecoveryWarning(const string& message) = 0;
         virtual void showOrders(const vector<SaleRecord>& orders, const string& selectedId) = 0;
         virtual void showBill(const SaleRecord& order) = 0;
         virtual void clearBill() = 0;
@@ -72,6 +74,7 @@ public:
     void onChangePin(const string& currentPin, const string& newPin, const string& confirmation);
     void onCameraTick();
     void onHeldOrdersClicked();
+    void onDiscardResumedOrder();
     void onCartQuantityChanged(const string& productId, int64_t quantity);
     void cancelPendingQuantity(const string& productId);
     void onGenerateBillClicked();
@@ -134,6 +137,7 @@ private:
     void stopCurrentOrderCamera();
     void closeEvent(QCloseEvent* event) override;
     void generateCurrentBill(OrderStatus status);
+    void clearCurrentOrder();
     void addScannedProduct(const string& barcode);
     void displayOrder(const SaleRecord& order);
     void clearOrderSelection();

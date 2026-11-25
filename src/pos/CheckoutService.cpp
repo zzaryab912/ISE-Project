@@ -453,6 +453,15 @@ Result<SaleRecord> CheckoutService::save(const vector<CartItem>& items, const Cu
     sale.status = status;
     sale.payment = std::move(checkedPayment.value);
     sale.lines = std::move(priced.value.lines);
+    if (heldOrderId) {
+        for (auto& line : sale.lines) {
+            const auto savedLine = find_if(original->lines.begin(), original->lines.end(),
+                [&line](const SaleLine& saved) { return saved.productId == line.productId; });
+            if (savedLine != original->lines.end()) {
+                line.barcode = savedLine->barcode;
+            }
+        }
+    }
     sale.terms = priced.value.terms;
     sale.totals = priced.value.totals;
     if (status == OrderStatus::Paid) {

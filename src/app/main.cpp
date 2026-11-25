@@ -944,6 +944,7 @@ int main(int argc, char *argv[])
 
     const QString lockPath = QString::fromStdString((dataRoot / ".eyeris.lock").u8string());
     QLockFile storeLock(lockPath);
+    storeLock.setStaleLockTime(0);
     const Status locked = acquireStoreLock(storeLock, dataRoot, lockPath);
     if (!locked.success) {
         QMessageBox::critical(nullptr, QStringLiteral("Eyeris"),

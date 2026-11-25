@@ -76,6 +76,9 @@ target_compile_definitions(Eyeris PRIVATE
     EYERIS_PROJECT_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
     EYERIS_SOURCE_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
+if(MSVC)
+    target_compile_options(Eyeris PRIVATE /utf-8)
+endif()
 target_link_libraries(Eyeris PRIVATE Qt6::Widgets Qt6::Svg ${EYERIS_QTKEYCHAIN_TARGET} ${OpenCV_LIBS})
 
 if(APPLE)
