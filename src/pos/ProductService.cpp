@@ -300,3 +300,280 @@ Result<QImage> ProductService::previewBarcode(const string& categoryId) const {
     }
     return { true, {}, img };
 }
+
+/**
+ * @brief Computes physical (onHand), reserved, and available stock from one StoreData snapshot.
+ * Active reservations come from unarchived OnHold orders. Excluding a held order ID allows
+ * a resumed hold to spend its own reservation.
+ */
+Result<StockPosition> ProductService::stockPosition(
+    const StoreData& data,
+    const string& productId,
+    const string& excludeHeldOrderId) const {
+
+    auto prodIt = find_if(data.products.begin(), data.products.end(),
+        [&](const Product& p) { return p.id == productId; });
+    if (prodIt == data.products.end()) {
+        return { false, "Product not found in catalogue.", {} };
+    }
+
+    int64_t reserved = 0;
+    for (const auto& sale : data.sales) {
+        if (sale.archived || sale.status != OrderStatus::OnHold) {
+            continue;
+        }
+        if (!excludeHeldOrderId.empty() && sale.ids.orderId == excludeHeldOrderId) {
+            continue;
+        }
+        for (const auto& line : sale.lines) {
+            if (line.productId == productId && line.quantity > 0) {
+                reserved += line.quantity;
+            }
+        }
+    }
+
+    StockPosition pos;
+    pos.onHand = prodIt->onHand;
+    pos.reserved = reserved;
+    pos.available = max<int64_t>(0, prodIt->onHand - reserved);
+    return { true, {}, pos };
+}
+
+/**
+ * @brief Lists all products along with their computed stock positions from a single snapshot.
+ */
+Result<vector<ProductStock>> ProductService::listWithStock() const {
+    Result<StoreData> storeResult = store_.read();
+    if (!storeResult.success) {
+        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message, {} };
+    }
+
+    vector<ProductStock> resultList;
+    resultList.reserve(storeResult.value.products.size());
+
+    for (const auto& prod : storeResult.value.products) {
+        Result<StockPosition> posResult = stockPosition(storeResult.value, prod.id, "");
+        if (!posResult.success) {
+            return { false, posResult.message, {} };
+        }
+        resultList.push_back({ prod, posResult.value });
+    }
+    return { true, {}, resultList };
+}
+
+/**
+ * @brief Resolves a product by ID with live stock, optionally excluding a held order's own reservation.
+ */
+Result<ProductStock> ProductService::findWithStock(
+    const string& productId,
+    const string& excludeHeldOrderId) const {
+
+    Result<StoreData> storeResult = store_.read();
+    if (!storeResult.success) {
+        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message, {} };
+    }
+
+    auto prodIt = find_if(storeResult.value.products.begin(), storeResult.value.products.end(),
+        [&](const Product& p) { return p.id == productId; });
+    if (prodIt == storeResult.value.products.end()) {
+        return { false, "Product not found with the given ID.", {} };
+    }
+
+    Result<StockPosition> posResult = stockPosition(storeResult.value, prodIt->id, excludeHeldOrderId);
+    if (!posResult.success) {
+        return { false, posResult.message, {} };
+    }
+    return { true, {}, {*prodIt, posResult.value} };
+}
+
+/**
+ * @brief Resolves a product by its live barcode with stock, optionally excluding a held order's reservation.
+ */
+Result<ProductStock> ProductService::findWithStockByBarcode(
+    const string& barcode,
+    const string& excludeHeldOrderId) const {
+
+    Result<StoreData> storeResult = store_.read();
+    if (!storeResult.success) {
+        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message, {} };
+    }
+
+    auto prodIt = find_if(storeResult.value.products.begin(), storeResult.value.products.end(),
+        [&](const Product& p) { return p.barcode == barcode; });
+    if (prodIt == storeResult.value.products.end()) {
+        return { false, "Product not found with the given barcode.", {} };
+    }
+
+    Result<StockPosition> posResult = stockPosition(storeResult.value, prodIt->id, excludeHeldOrderId);
+    if (!posResult.success) {
+        return { false, posResult.message, {} };
+    }
+    return { true, {}, {*prodIt, posResult.value} };
+}
+
+/**
+ * @brief Checks all requested sale lines against live stock and returns any shortages.
+ * A missing product or changed unit produces a named shortage with zero available.
+ */
+Result<vector<StockShortage>> ProductService::shortages(
+    const StoreData& data,
+    const vector<SaleLine>& requested,
+    const string& excludeHeldOrderId) const {
+
+    vector<StockShortage> shortageList;
+
+    for (const auto& line : requested) {
+        if (line.quantity <= 0) {
+            continue;
+        }
+
+        auto prodIt = find_if(data.products.begin(), data.products.end(),
+            [&](const Product& p) { return p.id == line.productId; });
+
+        if (prodIt == data.products.end() || prodIt->unit != line.unit) {
+            string displayName = !line.name.empty() ? line.name : line.acronym;
+            shortageList.push_back({ line.productId, displayName, line.unit, line.quantity, 0 });
+            continue;
+        }
+
+        Result<StockPosition> posResult = stockPosition(data, prodIt->id, excludeHeldOrderId);
+        int64_t available = posResult.success ? posResult.value.available : 0;
+
+        if (available < line.quantity) {
+            shortageList.push_back({ prodIt->id, prodIt->name, prodIt->unit, line.quantity, available });
+        }
+    }
+
+    return { true, {}, shortageList };
+}
+
+/**
+ * @brief Validates and deducts physical stock in the supplied snapshot without writing to disk.
+ * Leaves the snapshot unchanged if any line fails validation or has a shortage.
+ */
+Status ProductService::deductStock(
+    StoreData& data,
+    const vector<SaleLine>& lines,
+    const string& excludeHeldOrderId) const {
+
+    for (const auto& line : lines) {
+        if (line.quantity < 0) {
+            return { false, "Quantity cannot be negative for product ID: " + line.productId };
+        }
+        if (line.unit == Unit::Count && (line.quantity % 1000 != 0)) {
+            return { false, "Count product quantity must be a whole number for product ID: " + line.productId };
+        }
+    }
+
+    Result<vector<StockShortage>> check = shortages(data, lines, excludeHeldOrderId);
+    if (!check.success) {
+        return { false, check.message };
+    }
+    if (!check.value.empty()) {
+        return { false, "Insufficient stock for product: " + check.value.front().name };
+    }
+
+    // All checks passed; apply physical stock deductions
+    for (const auto& line : lines) {
+        if (line.quantity == 0) {
+            continue;
+        }
+        auto prodIt = find_if(data.products.begin(), data.products.end(),
+            [&](const Product& p) { return p.id == line.productId; });
+        if (prodIt != data.products.end()) {
+            prodIt->onHand -= line.quantity;
+        }
+    }
+
+    return { true, "Stock deducted successfully." };
+}
+
+/**
+ * @brief Applies net stock increases or restockable decreases for an approved paid bill edit.
+ * Validates the entire batch before mutating any product in the snapshot.
+ */
+Status ProductService::applyPaidStockDifference(
+    StoreData& data,
+    const vector<SaleLine>& before,
+    const vector<QuantityChange>& changes) const {
+
+    struct PendingDelta {
+        string productId;
+        int64_t onHandDelta; // negative for additional deduction, positive for restock
+    };
+
+    vector<PendingDelta> pending;
+    unordered_set<string> seenIds;
+
+    for (const auto& change : changes) {
+        if (!seenIds.insert(change.productId).second) {
+            return { false, "Duplicate product ID in paid edit changes: " + change.productId };
+        }
+        if (change.quantity < 0 || change.restockQuantity < 0) {
+            return { false, "Quantities and restock values must be non-negative." };
+        }
+
+        auto beforeIt = find_if(before.begin(), before.end(),
+            [&](const SaleLine& l) { return l.productId == change.productId; });
+        if (beforeIt == before.end()) {
+            return { false, "Edited product does not exist on the original bill: " + change.productId };
+        }
+
+        if (beforeIt->unit == Unit::Count &&
+            (change.quantity % 1000 != 0 || change.restockQuantity % 1000 != 0)) {
+            return { false, "Count quantities must be whole numbers for product ID: " + change.productId };
+        }
+
+        int64_t delta = change.quantity - beforeIt->quantity;
+
+        if (delta > 0) {
+            if (change.restockQuantity != 0) {
+                return { false, "Restock quantity must be zero when increasing a paid line." };
+            }
+
+            auto prodIt = find_if(data.products.begin(), data.products.end(),
+                [&](const Product& p) { return p.id == change.productId; });
+            if (prodIt == data.products.end() || prodIt->unit != beforeIt->unit) {
+                return { false, "Cannot increase quantity: product is missing or its unit has changed." };
+            }
+
+            Result<StockPosition> posResult = stockPosition(data, prodIt->id, "");
+            if (!posResult.success || posResult.value.available < delta) {
+                return { false, "Insufficient sellable stock to increase quantity for: " + prodIt->name };
+            }
+
+            pending.push_back({ prodIt->id, -delta });
+        }
+        else if (delta < 0) {
+            int64_t decrease = -delta;
+            if (change.restockQuantity > decrease) {
+                return { false, "Restock quantity cannot exceed the reduced quantity." };
+            }
+
+            if (change.restockQuantity > 0) {
+                auto prodIt = find_if(data.products.begin(), data.products.end(),
+                    [&](const Product& p) { return p.id == change.productId; });
+                if (prodIt == data.products.end() || prodIt->unit != beforeIt->unit) {
+                    return { false, "Cannot restock: product is missing or its unit has changed." };
+                }
+                pending.push_back({ prodIt->id, change.restockQuantity });
+            }
+        }
+        else {
+            if (change.restockQuantity != 0) {
+                return { false, "Restock quantity must be zero when line quantity is unchanged." };
+            }
+        }
+    }
+
+    // All validations succeeded; apply mutations to snapshot
+    for (const auto& op : pending) {
+        auto prodIt = find_if(data.products.begin(), data.products.end(),
+            [&](const Product& p) { return p.id == op.productId; });
+        if (prodIt != data.products.end()) {
+            prodIt->onHand += op.onHandDelta;
+        }
+    }
+
+    return { true, "Paid stock adjustments applied successfully." };
+}
