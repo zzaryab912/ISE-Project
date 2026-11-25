@@ -1,14 +1,13 @@
 #pragma once
+
 #include "PosTypes.h"
-#include <vector>
 
-class PricingCalculator{
+using namespace std;
 
-
+class PricingCalculator {
 public:
-
     PricingCalculator() = default;
 
-    Result<Totals> calculate(const std::vector<CartItem>& items) const;
-    
+    Result<PricingResult> calculate(const vector<SaleLine>& lines,
+                                    const PricingTerms& terms) const;
 };
