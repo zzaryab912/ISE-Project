@@ -7,6 +7,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -435,6 +436,9 @@ Result<vector<StockShortage>> ProductService::shortages(
             order.push_back(line.productId);
             firstLine[line.productId] = &line;
         }
+        if (aggregatedQty[line.productId] > numeric_limits<int64_t>::max() - line.quantity) {
+            return { false, "Requested quantity overflows supported limit for product ID: " + line.productId, {} };
+        }
         aggregatedQty[line.productId] += line.quantity;
     }
 
@@ -570,6 +574,9 @@ Status ProductService::applyPaidStockDifference(
                     [&](const Product& p) { return p.id == change.productId; });
                 if (prodIt == data.products.end() || prodIt->unit != beforeIt->unit) {
                     return { false, "Cannot restock: product is missing or its unit has changed." };
+                }
+                if (prodIt->onHand > numeric_limits<int64_t>::max() - change.restockQuantity) {
+                    return { false, "Cannot restock: physical stock would overflow for product: " + prodIt->name };
                 }
                 pending.push_back({ prodIt->id, change.restockQuantity });
             }
@@ -758,90 +765,4 @@ Result<Product> ProductService::update(const Product& original, const Product& r
         }
     }
 
-    if (hasActiveHold && replacement.unit != prodIt->unit) {
-        return { false, "Cannot change unit while an active OnHold order references this product.", {} };
-    }
-
-    // Allocate a new barcode and PNG only if category changed
-    bool categoryChanged = (replacement.categoryId != prodIt->categoryId);
-    string newBarcode;
-    string newImagePath;
-
-    if (categoryChanged) {
-        Result<string> barcodeResult = allocateBarcode(data, replacement.categoryId);
-        if (!barcodeResult.success) {
-            return { false, barcodeResult.message, {} };
-        }
-        Result<string> imageResult = images_.save(barcodeResult.value);
-        if (!imageResult.success) {
-            return { false, "Failed to generate new barcode PNG: " + imageResult.message, {} };
-        }
-        newBarcode = barcodeResult.value;
-        newImagePath = imageResult.value;
-    }
-
-    // Apply updates while preserving internal product ID
-    prodIt->categoryId = replacement.categoryId;
-    prodIt->acronym = cleanAcronym;
-    prodIt->name = cleanName;
-    prodIt->unit = replacement.unit;
-    prodIt->unitPrice = replacement.unitPrice;
-    prodIt->taxRate = replacement.taxRate;
-    prodIt->discountPerUnit = replacement.discountPerUnit;
-    prodIt->onHand = replacement.onHand;
-
-    if (categoryChanged) {
-        prodIt->barcode = newBarcode;
-        prodIt->barcodeImagePath = newImagePath;
-        data.issuedBarcodes.push_back(newBarcode);
-    }
-
-    Product updated = *prodIt;
-    Status saveStatus = store_.save(data);
-    if (!saveStatus.success) {
-        if (categoryChanged) {
-            error_code ec;
-            filesystem::remove(images_.imagePath(newBarcode), ec);
-        }
-        return { false, saveStatus.message.empty() ? "Failed to save updated product." : saveStatus.message, {} };
-    }
-
-    return { true, "Product updated successfully.", updated };
-}
-
-/**
- * @brief Deletes a product if no active (unarchived) OnHold order references it.
- *        Preserves all issued barcodes and historical bill lines.
- */
-Status ProductService::remove(const string& productId) {
-    Result<StoreData> storeResult = store_.read();
-    if (!storeResult.success) {
-        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message };
-    }
-    StoreData data = storeResult.value;
-
-    auto prodIt = find_if(data.products.begin(), data.products.end(),
-        [&](const Product& p) { return p.id == productId; });
-    if (prodIt == data.products.end()) {
-        return { false, "Product not found." };
-    }
-
-    for (const auto& sale : data.sales) {
-        if (sale.archived || sale.status != OrderStatus::OnHold) {
-            continue;
-        }
-        for (const auto& line : sale.lines) {
-            if (line.productId == productId && line.quantity > 0) {
-                return { false, "Cannot delete product: it is referenced by an active OnHold order." };
-            }
-        }
-    }
-
-    data.products.erase(prodIt);
-    Status saveStatus = store_.save(data);
-    if (!saveStatus.success) {
-        return { false, saveStatus.message.empty() ? "Failed to remove product from storage." : saveStatus.message };
-    }
-
-    return { true, "Product removed successfully." };
-}
+    if (has
