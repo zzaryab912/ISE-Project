@@ -577,3 +577,256 @@ Status ProductService::applyPaidStockDifference(
 
     return { true, "Paid stock adjustments applied successfully." };
 }
+
+/**
+ * @brief Validates product fields, assigns a new ID and category-prefixed barcode,
+ *        generates the PNG asset, and persists the product and issued barcode together.
+ *        Cleans up the newly created PNG if storage save fails.
+ */
+Result<Product> ProductService::create(const Product& input) {
+    string cleanName = trim(input.name);
+    string cleanAcronym = trim(input.acronym);
+
+    if (cleanName.empty() || cleanAcronym.empty()) {
+        return { false, "Product name and acronym must not be empty.", {} };
+    }
+    if (!isValidCategoryId(input.categoryId)) {
+        return { false, "A valid category ID (10-99) is required.", {} };
+    }
+    if (input.unitPrice < 0 || input.discountPerUnit < 0 || input.discountPerUnit > input.unitPrice) {
+        return { false, "Invalid unit price or discount per unit.", {} };
+    }
+    if (input.taxRate < 0 || input.taxRate > 10000) {
+        return { false, "Tax rate must be between 0 and 10000 basis points (0.00% - 100.00%).", {} };
+    }
+    if (input.onHand < 0) {
+        return { false, "On-hand stock cannot be negative.", {} };
+    }
+    if (input.unit == Unit::Count && (input.onHand % 1000 != 0)) {
+        return { false, "Count product on-hand stock must be a whole number.", {} };
+    }
+
+    Result<StoreData> storeResult = store_.read();
+    if (!storeResult.success) {
+        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message, {} };
+    }
+    StoreData data = storeResult.value;
+
+    bool categoryExists = any_of(data.categories.begin(), data.categories.end(),
+        [&](const Category& c) { return c.id == input.categoryId; });
+    if (!categoryExists) {
+        return { false, "Selected category does not exist.", {} };
+    }
+
+    Result<string> idResult = ids_.productId(data);
+    if (!idResult.success) {
+        return { false, "Failed to generate product ID: " + idResult.message, {} };
+    }
+
+    Result<string> barcodeResult = allocateBarcode(data, input.categoryId);
+    if (!barcodeResult.success) {
+        return { false, barcodeResult.message, {} };
+    }
+
+    Result<string> imageResult = images_.save(barcodeResult.value);
+    if (!imageResult.success) {
+        return { false, "Failed to generate barcode PNG: " + imageResult.message, {} };
+    }
+
+    Product created = input;
+    created.id = idResult.value;
+    created.barcode = barcodeResult.value;
+    created.name = cleanName;
+    created.acronym = cleanAcronym;
+    created.barcodeImagePath = imageResult.value;
+
+    data.products.push_back(created);
+    data.issuedBarcodes.push_back(created.barcode);
+
+    Status saveStatus = store_.save(data);
+    if (!saveStatus.success) {
+        error_code ec;
+        filesystem::remove(images_.imagePath(created.barcode), ec);
+        return { false, saveStatus.message.empty() ? "Failed to save product to storage." : saveStatus.message, {} };
+    }
+
+    return { true, "Product created successfully.", created };
+}
+
+/**
+ * @brief Updates an existing product after verifying the original snapshot.
+ *        Preserves product ID, allocates a new barcode only on category reassignment,
+ *        and blocks reducing on-hand stock below reservations or changing unit on active holds.
+ */
+Result<Product> ProductService::update(const Product& original, const Product& replacement) {
+    string cleanName = trim(replacement.name);
+    string cleanAcronym = trim(replacement.acronym);
+
+    if (cleanName.empty() || cleanAcronym.empty()) {
+        return { false, "Product name and acronym must not be empty.", {} };
+    }
+    if (!isValidCategoryId(replacement.categoryId)) {
+        return { false, "A valid category ID (10-99) is required.", {} };
+    }
+    if (replacement.unitPrice < 0 || replacement.discountPerUnit < 0 ||
+        replacement.discountPerUnit > replacement.unitPrice) {
+        return { false, "Invalid unit price or discount per unit.", {} };
+    }
+    if (replacement.taxRate < 0 || replacement.taxRate > 10000) {
+        return { false, "Tax rate must be between 0 and 10000 basis points (0.00% - 100.00%).", {} };
+    }
+    if (replacement.onHand < 0) {
+        return { false, "On-hand stock cannot be negative.", {} };
+    }
+    if (replacement.unit == Unit::Count && (replacement.onHand % 1000 != 0)) {
+        return { false, "Count product on-hand stock must be a whole number.", {} };
+    }
+
+    Result<StoreData> storeResult = store_.read();
+    if (!storeResult.success) {
+        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message, {} };
+    }
+    StoreData data = storeResult.value;
+
+    auto prodIt = find_if(data.products.begin(), data.products.end(),
+        [&](const Product& p) { return p.id == original.id; });
+    if (prodIt == data.products.end()) {
+        return { false, "Original product not found in catalogue.", {} };
+    }
+
+    // Verify the original snapshot matches the currently stored row
+    bool snapshotMatches = (prodIt->barcode == original.barcode &&
+        prodIt->categoryId == original.categoryId &&
+        prodIt->acronym == original.acronym &&
+        prodIt->name == original.name &&
+        prodIt->unit == original.unit &&
+        prodIt->unitPrice == original.unitPrice &&
+        prodIt->taxRate == original.taxRate &&
+        prodIt->discountPerUnit == original.discountPerUnit &&
+        prodIt->onHand == original.onHand &&
+        prodIt->barcodeImagePath == original.barcodeImagePath);
+    if (!snapshotMatches) {
+        return { false, "Product was modified by another operation. Please refresh and try again.", {} };
+    }
+
+    bool categoryExists = any_of(data.categories.begin(), data.categories.end(),
+        [&](const Category& c) { return c.id == replacement.categoryId; });
+    if (!categoryExists) {
+        return { false, "Selected category does not exist.", {} };
+    }
+
+    // Check active hold reservations for this product
+    Result<StockPosition> posResult = stockPosition(data, prodIt->id, "");
+    if (!posResult.success) {
+        return { false, posResult.message, {} };
+    }
+
+    if (replacement.onHand < posResult.value.reserved) {
+        return { false, "On-hand stock cannot be reduced below currently reserved hold quantities.", {} };
+    }
+
+    bool hasActiveHold = (posResult.value.reserved > 0);
+    if (!hasActiveHold) {
+        for (const auto& sale : data.sales) {
+            if (sale.archived || sale.status != OrderStatus::OnHold) {
+                continue;
+            }
+            for (const auto& line : sale.lines) {
+                if (line.productId == prodIt->id && line.quantity > 0) {
+                    hasActiveHold = true;
+                    break;
+                }
+            }
+            if (hasActiveHold) {
+                break;
+            }
+        }
+    }
+
+    if (hasActiveHold && replacement.unit != prodIt->unit) {
+        return { false, "Cannot change unit while an active OnHold order references this product.", {} };
+    }
+
+    // Allocate a new barcode and PNG only if category changed
+    bool categoryChanged = (replacement.categoryId != prodIt->categoryId);
+    string newBarcode;
+    string newImagePath;
+
+    if (categoryChanged) {
+        Result<string> barcodeResult = allocateBarcode(data, replacement.categoryId);
+        if (!barcodeResult.success) {
+            return { false, barcodeResult.message, {} };
+        }
+        Result<string> imageResult = images_.save(barcodeResult.value);
+        if (!imageResult.success) {
+            return { false, "Failed to generate new barcode PNG: " + imageResult.message, {} };
+        }
+        newBarcode = barcodeResult.value;
+        newImagePath = imageResult.value;
+    }
+
+    // Apply updates while preserving internal product ID
+    prodIt->categoryId = replacement.categoryId;
+    prodIt->acronym = cleanAcronym;
+    prodIt->name = cleanName;
+    prodIt->unit = replacement.unit;
+    prodIt->unitPrice = replacement.unitPrice;
+    prodIt->taxRate = replacement.taxRate;
+    prodIt->discountPerUnit = replacement.discountPerUnit;
+    prodIt->onHand = replacement.onHand;
+
+    if (categoryChanged) {
+        prodIt->barcode = newBarcode;
+        prodIt->barcodeImagePath = newImagePath;
+        data.issuedBarcodes.push_back(newBarcode);
+    }
+
+    Product updated = *prodIt;
+    Status saveStatus = store_.save(data);
+    if (!saveStatus.success) {
+        if (categoryChanged) {
+            error_code ec;
+            filesystem::remove(images_.imagePath(newBarcode), ec);
+        }
+        return { false, saveStatus.message.empty() ? "Failed to save updated product." : saveStatus.message, {} };
+    }
+
+    return { true, "Product updated successfully.", updated };
+}
+
+/**
+ * @brief Deletes a product if no active (unarchived) OnHold order references it.
+ *        Preserves all issued barcodes and historical bill lines.
+ */
+Status ProductService::remove(const string& productId) {
+    Result<StoreData> storeResult = store_.read();
+    if (!storeResult.success) {
+        return { false, storeResult.message.empty() ? "Failed to read storage." : storeResult.message };
+    }
+    StoreData data = storeResult.value;
+
+    auto prodIt = find_if(data.products.begin(), data.products.end(),
+        [&](const Product& p) { return p.id == productId; });
+    if (prodIt == data.products.end()) {
+        return { false, "Product not found." };
+    }
+
+    for (const auto& sale : data.sales) {
+        if (sale.archived || sale.status != OrderStatus::OnHold) {
+            continue;
+        }
+        for (const auto& line : sale.lines) {
+            if (line.productId == productId && line.quantity > 0) {
+                return { false, "Cannot delete product: it is referenced by an active OnHold order." };
+            }
+        }
+    }
+
+    data.products.erase(prodIt);
+    Status saveStatus = store_.save(data);
+    if (!saveStatus.success) {
+        return { false, saveStatus.message.empty() ? "Failed to remove product from storage." : saveStatus.message };
+    }
+
+    return { true, "Product removed successfully." };
+}
