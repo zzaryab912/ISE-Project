@@ -1,26 +1,29 @@
-
 #ifndef POSSTORAGE_H
 #define POSSTORAGE_H
 
 #include "IPosStore.h"
 #include <filesystem>
 
+using namespace std;
+
 class PosStorage : public IPosStore {
 private:
-    std::filesystem::path dataRoot_;
+    filesystem::path dataRoot_;
     StoreData data_;
     bool loaded_ = false;
 
 public:
-    PosStorage(std::filesystem::path dataRoot);
+    PosStorage(filesystem::path dataRoot);
 
     Status load();
+
+    Status importIncrement2Catalogue(const filesystem::path& sourceRoot);
 
     Result<StoreData> read() const override;
 
     Status save(const StoreData& data) override;
 
-    ~PosStorage() {}
+    ~PosStorage() override = default;
 };
 
 #endif

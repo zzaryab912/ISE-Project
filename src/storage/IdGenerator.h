@@ -3,11 +3,13 @@
 
 #include "PosTypes.h"
 
+using namespace std;
+
 class IdGenerator {
 public:
     IdGenerator() = default;
 
-    Result<std::string> productId(const StoreData& data) const;
+    Result<string> productId(const StoreData& data) const;
 
     Result<SaleIds> saleIds(
         const StoreData& data,

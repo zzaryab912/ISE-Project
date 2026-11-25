@@ -50,6 +50,10 @@ QImage BarcodeAssetService::preview(const string& barcode) const {
  * @return A Result object containing the relative filename on success, or an error message on failure.
  */
 Result<string> BarcodeAssetService::save(const string& barcode) const {
+    if (dataRoot_.empty()) {
+        return {false, "A data root is required to save barcode images.", {}};
+    }
+
     Result<string> result;
 
     // Attempt to generate the in-memory image first
