@@ -47,6 +47,8 @@ public:
         virtual void showCartError(const string& message) = 0;
         virtual void setBillSaving(bool saving) = 0;
         virtual void showBillError(const string& message) = 0;
+        virtual void showHeldOrders(const vector<SaleRecord>& orders) = 0;
+        virtual bool heldOrdersOpen() const = 0;
         virtual void selectQuantity(const string& id) = 0;
         virtual void clearQuantityDraft(const string& id) = 0;
         virtual void setCustomer(const Customer& customer) = 0;
@@ -137,7 +139,6 @@ private:
     string pdfRecoveryWarning_;
     bool busy_ = false;
     bool currentOrderOpened_ = false;
-    bool choosingHeldOrder_ = false;
 
     void enterRole(Role role);
     void showRolePicker();

@@ -11,12 +11,12 @@
 #include "ProductService.h"
 
 #include <QApplication>
+#include <QCalendarWidget>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateEdit>
 #include <QDateTime>
 #include <QDesktopServices>
-#include <QDialog>
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
@@ -47,8 +47,10 @@
 #include <QStyle>
 #include <QStyledItemDelegate>
 #include <QSvgRenderer>
+#include <QTextCharFormat>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #include <QWindow>
 
 #include <algorithm>
@@ -400,31 +402,47 @@ QLineEdit* field(QWidget* parent, int x, int y, int width, const QString& title,
     return widget;
 }
 
+constexpr int choiceDetailRole = Qt::UserRole + 1;
+
 class ChoiceRows final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex& index) const override
     {
-        return {0, 40};
+        return {0, index.data(choiceDetailRole).toString().isEmpty() ? 40 : 56};
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         const bool chosen = index.data(Qt::UserRole).toBool();
         const bool highlighted = option.state & (QStyle::State_Selected | QStyle::State_MouseOver);
-        const QRect row = option.rect.adjusted(0, 1, 0, -1);
+        const QString detail = index.data(choiceDetailRole).toString();
+        const QRect row = option.rect.adjusted(0, detail.isEmpty() ? 1 : 2, -1, -2);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
-        if (chosen || highlighted) {
+        if (!detail.isEmpty()) {
+            painter->setPen(QColor(highlighted ? "#c9d9d7" : "#e4e4e4"));
+            painter->setBrush(QColor(highlighted ? "#ebf2f1" : "#ffffff"));
+            painter->drawRoundedRect(row, 8, 8);
+        } else if (chosen || highlighted) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(chosen ? "#e9e9e9" : "#efefef"));
             painter->drawRoundedRect(row, 7, 7);
         }
         painter->setPen(QColor(ink));
-        painter->setFont(interfaceFont(14, chosen ? QFont::Medium : QFont::Normal));
-        painter->drawText(row.adjusted(11, 0, -32, 0), Qt::AlignVCenter,
-                          index.data(Qt::DisplayRole).toString());
+        painter->setFont(interfaceFont(14, chosen || !detail.isEmpty() ? QFont::Medium : QFont::Normal));
+        const auto bounds = row.adjusted(11, 0, chosen ? -32 : -11, 0);
+        const auto content = painter->fontMetrics().elidedText(index.data(Qt::DisplayRole).toString(),
+                                                              Qt::ElideRight, bounds.width());
+        const auto title = detail.isEmpty() ? bounds : bounds.adjusted(0, 7, 0, -24);
+        painter->drawText(title, Qt::AlignVCenter, content);
+        if (!detail.isEmpty()) {
+            painter->setFont(interfaceFont(12));
+            painter->setPen(QColor(detailMuted));
+            painter->drawText(bounds.adjusted(0, 26, 0, -5), Qt::AlignVCenter,
+                              painter->fontMetrics().elidedText(detail, Qt::ElideRight, bounds.width()));
+        }
         if (chosen) {
             const QPointF end(row.right() - 15, row.center().y() - 4);
             QPainterPath tick;
@@ -459,6 +477,41 @@ public:
     {
         setCalendarPopup(true);
         setDisplayFormat("dd MMM yyyy");
+        auto* calendar = calendarWidget();
+        calendar->setFont(interfaceFont(14));
+        calendar->setVerticalHeaderFormat(QCalendarWidget::NoVerticalHeader);
+        auto colors = calendar->palette();
+        colors.setColor(QPalette::Window, QColor("#fafafa"));
+        colors.setColor(QPalette::Base, Qt::white);
+        colors.setColor(QPalette::AlternateBase, QColor("#f1f5f4"));
+        colors.setColor(QPalette::WindowText, QColor(ink));
+        colors.setColor(QPalette::Text, QColor(ink));
+        colors.setColor(QPalette::ButtonText, QColor(ink));
+        colors.setColor(QPalette::Highlight, QColor("#3f6360"));
+        colors.setColor(QPalette::HighlightedText, Qt::white);
+        colors.setColor(QPalette::Disabled, QPalette::Text, QColor("#767676"));
+        calendar->setPalette(colors);
+        QTextCharFormat weekend;
+        weekend.setForeground(QColor(ink));
+        calendar->setWeekdayTextFormat(Qt::Saturday, weekend);
+        calendar->setWeekdayTextFormat(Qt::Sunday, weekend);
+        calendar->setStyleSheet(R"(
+            QCalendarWidget { background:#fafafa; color:#171717; }
+            QWidget#qt_calendar_navigationbar { background:#eef3f2; }
+            QCalendarWidget QToolButton { background:transparent; color:#242424; border:0; border-radius:7px;
+                padding:4px 7px; margin:2px; }
+            QCalendarWidget QToolButton:hover, QCalendarWidget QToolButton:focus { background:#dfe9e7; }
+            QCalendarWidget QToolButton::menu-indicator { image:none; }
+            QCalendarWidget QSpinBox { background:#ffffff; color:#242424; border:1px solid #b8ccc9;
+                border-radius:6px; }
+            QCalendarWidget QAbstractItemView { background:#ffffff; border:0; outline:0;
+                alternate-background-color:#f1f5f4; selection-background-color:#3f6360;
+                selection-color:#ffffff; }
+            QCalendarWidget QMenu { background:#fafafa; color:#242424; border:1px solid #e1e5e4; padding:4px; }
+            QCalendarWidget QMenu::item { padding:4px 14px; border-radius:6px; }
+            QCalendarWidget QMenu::item:selected { background:#e3ecea; color:#242424; }
+        )");
+        if (auto* dates = calendar->findChild<QAbstractItemView*>()) dates->setPalette(colors);
     }
 
 protected:
@@ -469,7 +522,7 @@ protected:
     }
 };
 
-class ChoiceBox final : public QComboBox {
+class ChoiceBox : public QComboBox {
 public:
     explicit ChoiceBox(QWidget* parent) : QComboBox(parent)
     {
@@ -484,26 +537,43 @@ public:
 
     void showPopup() override
     {
+        showChoices(width());
+    }
+
+    void hidePopup() override
+    {
+        if (popup_) popup_->hide();
+        QComboBox::hidePopup();
+    }
+
+    bool popupOpen() const { return menuOpen_; }
+
+protected:
+    void showChoices(int preferredWidth)
+    {
         if (count() == 0 || !isEnabled()) return;
         if (!popup_) createPopup();
         rows_->clear();
         for (int index = 0; index < count(); ++index) {
             auto* row = new QListWidgetItem(itemText(index), rows_);
             row->setData(Qt::UserRole, index == currentIndex());
+            const QVariant detail = itemData(index, choiceDetailRole);
+            row->setData(choiceDetailRole, detail);
+            if (detail.isValid()) row->setData(Qt::AccessibleDescriptionRole, detail);
         }
-        rows_->setCurrentRow(currentIndex());
-        QPoint position = mapToGlobal(QPoint(0, height() + 5));
-        int bodyHeight = std::min(count(), 8) * 40 + 12;
+        rows_->setCurrentRow(std::max(0, currentIndex()));
+        const int rowHeight = rows_->sizeHintForRow(0);
+        int bodyHeight = std::min(count(), 8) * rowHeight + 12;
         const auto* screen = QGuiApplication::screenAt(mapToGlobal(rect().center()));
-        int bodyWidth = width();
+        int bodyWidth = screen ? std::min(preferredWidth, screen->availableGeometry().width()) : preferredWidth;
+        QPoint position = mapToGlobal(QPoint(width() - bodyWidth, height() + 5));
         if (screen) {
             const QRect available = screen->availableGeometry();
             const QPoint control = mapToGlobal(QPoint());
             const int below = available.bottom() + 1 - position.y();
             const int above = control.y() - available.top() - 5;
             const bool opensAbove = below < bodyHeight && above > below;
-            bodyHeight = std::max(52, std::min(bodyHeight, opensAbove ? above : below));
-            bodyWidth = std::min(bodyWidth, available.width());
+            bodyHeight = std::max(rowHeight + 12, std::min(bodyHeight, opensAbove ? above : below));
             if (opensAbove) position.setY(control.y() - bodyHeight - 5);
             position.setX(std::clamp(position.x(), available.left(), available.right() - bodyWidth + 1));
             position.setY(std::clamp(position.y(), available.top(),
@@ -519,13 +589,6 @@ public:
         rows_->setFocus(Qt::PopupFocusReason);
     }
 
-    void hidePopup() override
-    {
-        if (popup_) popup_->hide();
-        QComboBox::hidePopup();
-    }
-
-protected:
     void paintEvent(QPaintEvent* event) override
     {
         QComboBox::paintEvent(event);
@@ -567,11 +630,11 @@ private:
     void selectRow()
     {
         const int index = rows_->currentRow();
+        hidePopup();
         if (index >= 0) {
             setCurrentIndex(index);
             emit activated(index);
         }
-        hidePopup();
     }
 
     void createPopup()
@@ -605,6 +668,67 @@ private:
     QWidget* body_ = nullptr;
     QListWidget* rows_ = nullptr;
     bool menuOpen_ = false;
+};
+
+class HeldOrdersChoice final : public ChoiceBox {
+public:
+    HeldOrdersChoice(QWidget* parent, const QRect& bounds, PosWindow& window)
+        : ChoiceBox(parent), window_(window)
+    {
+        setGeometry(bounds);
+        setFont(interfaceFont(14));
+        setAccessibleName("Held Orders");
+        setPlaceholderText("Held Orders");
+        setCursor(Qt::PointingHandCursor);
+        connect(this, &QComboBox::activated, this, [this](int index) {
+            const auto id = itemData(index).toString().toStdString();
+            setCurrentIndex(-1);
+            if (!id.empty()) window_.onResumeOrder(id);
+        });
+    }
+
+    void showPopup() override { window_.onHeldOrdersClicked(); }
+
+    void showOrders(const vector<SaleRecord>& orders)
+    {
+        clear();
+        for (const auto& order : orders) {
+            addItem(text(order.customer.name), text(order.ids.orderId));
+            setItemData(count() - 1, "#" + text(order.ids.orderId) + "  ·  PKR " +
+                        formattedMoney(order.totals.payable), choiceDetailRole);
+        }
+        setCurrentIndex(-1);
+        showChoices(328);
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            setFocus(Qt::MouseFocusReason);
+            showPopup();
+            event->accept();
+        } else {
+            QWidget::mousePressEvent(event);
+        }
+    }
+
+    void keyPressEvent(QKeyEvent* event) override
+    {
+        const int key = event->key();
+        if (key == Qt::Key_Space || key == Qt::Key_Return || key == Qt::Key_Enter ||
+            key == Qt::Key_Down || key == Qt::Key_Up || key == Qt::Key_F4) {
+            showPopup();
+            event->accept();
+        } else {
+            QWidget::keyPressEvent(event);
+        }
+    }
+
+    void wheelEvent(QWheelEvent* event) override { event->ignore(); }
+
+private:
+    PosWindow& window_;
 };
 
 QComboBox* selector(QWidget* parent, QRect bounds, const QString& title)
@@ -868,8 +992,7 @@ public:
         auto* order = panel(this, {0, 88, 998, 870}, "#ffffff", "#e3e3e3");
         label(order, {28, 26, 300, 24}, "Order items", 20, ink, QFont::DemiBold);
         count_ = label(order, {28, 56, 600, 16}, {}, 13, muted);
-        auto* held = action(order, {750, 24, 220, 38}, "Held Orders", Action::Secondary);
-        connect(held, &QPushButton::clicked, &window, &PosWindow::onHeldOrdersClicked);
+        heldOrders_ = new HeldOrdersChoice(order, {750, 24, 220, 38}, window);
         discardResume_ = action(order, {510, 24, 224, 38}, "Discard Resumed Draft", Action::Secondary);
         connect(discardResume_, &QPushButton::clicked, &window, &PosWindow::onDiscardResumedOrder);
         discardResume_->hide();
@@ -1122,6 +1245,8 @@ public:
     }
     bool hasDraft() const override { return !name_->text().isEmpty() || !contact_->text().isEmpty() || payment_->hasDraft() || !drafts_.empty(); }
     bool hasQuantityDraft() const override { return !drafts_.empty(); }
+    void showHeldOrders(const vector<SaleRecord>& orders) override { heldOrders_->showOrders(orders); }
+    bool heldOrdersOpen() const override { return heldOrders_->popupOpen(); }
     void showCartError(const string& message) override { cartError_->setText(text(message)); }
     void showBillError(const string& message) override
     {
@@ -1167,6 +1292,7 @@ private:
     SvgIcon* cameraIcon_ = nullptr;
     QLineEdit* name_ = nullptr;
     QLineEdit* contact_ = nullptr;
+    HeldOrdersChoice* heldOrders_ = nullptr;
     QPushButton* pay_ = nullptr;
     QPushButton* hold_ = nullptr;
     QPushButton* discardResume_ = nullptr;
@@ -1406,7 +1532,7 @@ public:
         for (size_t i = 0; i < figures.size(); ++i) {
             if (i == 5 && !figures[i]) continue;
             const bool total = i == figures.size() - 1;
-            label(content, {420, y, 235, 20}, captions[static_cast<int>(i)], total ? 16 : 13,
+            label(content, {28, y, 590, 20}, captions[static_cast<int>(i)], total ? 16 : 13,
                   total ? detailInk : detailMuted, total ? QFont::DemiBold : QFont::Normal);
             label(content, {650, y, 150, 20}, "PKR " + formattedMoney(figures[i]), total ? 16 : 13,
                   detailInk, total ? QFont::DemiBold : QFont::Normal, alignRight);
@@ -2211,7 +2337,7 @@ void PosWindow::onChangePin(const string& currentPin, const string& newPin, cons
 
 void PosWindow::onCameraTick()
 {
-    if (choosingHeldOrder_ || busy_) return;
+    if (busy_ || currentOrderPage_->heldOrdersOpen()) return;
     const auto scan = scanner_.poll();
     if (!scan.success) {
         stopCurrentOrderCamera();
@@ -2315,40 +2441,24 @@ void PosWindow::cancelPendingQuantity(const string& productId)
 
 void PosWindow::onHeldOrdersClicked()
 {
-    if (busy_ || choosingHeldOrder_ || role_ != Role::Cashier) return;
+    if (busy_ || currentOrderPage_->heldOrdersOpen() || role_ != Role::Cashier ||
+        pages_->currentWidget() != currentOrderPage_) return;
     if (!cart_.items().empty() || pendingProduct_ || currentOrderPage_->hasDraft() || !resumedOrderId_.empty()) {
         currentOrderPage_->showBillError("Finish or hold the active order before opening a held order.");
         return;
     }
-    const auto orders = history_.list();
+    auto orders = history_.list();
     if (!orders.success) { currentOrderPage_->showBillError(orders.message); return; }
-    QDialog picker(this);
-    picker.setWindowTitle("Held Orders");
-    picker.resize(480, 320);
-    auto* layout = new QVBoxLayout(&picker);
-    layout->addWidget(new QLabel("Select an order to resume."));
-    auto* list = new QListWidget;
-    list->setAccessibleName("Held orders");
-    layout->addWidget(list);
-    for (const auto& order : orders.value) {
-        if (order.status != OrderStatus::OnHold) continue;
-        auto* row = new QListWidgetItem(text(order.customer.name) + "  ·  #" + text(order.ids.orderId) +
-            "  ·  PKR " + formattedMoney(order.totals.payable), list);
-        row->setData(Qt::UserRole, text(order.ids.orderId));
-    }
-    if (list->count() == 0) {
+    auto& held = orders.value;
+    held.erase(std::remove_if(held.begin(), held.end(), [](const SaleRecord& order) {
+        return order.status != OrderStatus::OnHold;
+    }), held.end());
+    if (held.empty()) {
         currentOrderPage_->showBillError("No held orders.");
         return;
     }
-    QString orderId;
-    const auto choose = [&](QListWidgetItem* row) {
-        orderId = row->data(Qt::UserRole).toString();
-        picker.accept();
-    };
-    connect(list, &QListWidget::itemClicked, &picker, choose);
-    connect(list, &QListWidget::itemActivated, &picker, choose);
-    const QScopedValueRollback<bool> choosing(choosingHeldOrder_, true);
-    if (picker.exec() == QDialog::Accepted && !orderId.isEmpty()) onResumeOrder(orderId.toStdString());
+    currentOrderPage_->showBillError({});
+    currentOrderPage_->showHeldOrders(held);
 }
 
 void PosWindow::onResumeOrder(const string& orderId)
