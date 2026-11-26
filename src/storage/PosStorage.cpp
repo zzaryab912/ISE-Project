@@ -151,7 +151,9 @@ vector<Field> slices(const string& line)
             if (hasLineBreak(field.value)) {
                 throw runtime_error("String fields cannot contain line breaks.");
             }
-            if (!stream.eof() && !isspace(static_cast<unsigned char>(stream.peek()))) {
+            const int separator = stream.peek();
+            if (separator != char_traits<char>::eof() &&
+                !isspace(static_cast<unsigned char>(separator))) {
                 throw runtime_error("Missing whitespace after quoted string.");
             }
         } else {
@@ -1998,8 +2000,14 @@ void copyFileChecked(const filesystem::path& src, const filesystem::path& dst)
     if (!out.is_open()) {
         throw runtime_error("Unable to write staging file: " + dst.u8string());
     }
-    out << in.rdbuf();
-    if (in.bad()) {
+    array<char, 8192> buffer{};
+    while (in.read(buffer.data(), static_cast<streamsize>(buffer.size())) || in.gcount() > 0) {
+        out.write(buffer.data(), in.gcount());
+        if (!out) {
+            break;
+        }
+    }
+    if (in.bad() || (in.fail() && !in.eof())) {
         throw runtime_error("Error reading source file: " + src.u8string());
     }
     out.flush();

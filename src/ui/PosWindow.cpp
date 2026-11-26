@@ -2097,6 +2097,7 @@ void PosWindow::onChangePin(const string& currentPin, const string& newPin, cons
 
 void PosWindow::onCameraTick()
 {
+    if (choosingHeldOrder_ || busy_) return;
     const auto scan = scanner_.poll();
     if (!scan.success) {
         stopCurrentOrderCamera();
@@ -2109,7 +2110,7 @@ void PosWindow::onCameraTick()
         currentOrderPage_->showScannerMessage(scan.message);
         return;
     }
-    if (scan.value.codeChanged && !choosingHeldOrder_ && !busy_) addScannedProduct(scan.value.decoded.code);
+    if (scan.value.codeChanged) addScannedProduct(scan.value.decoded.code);
     else if (scan.value.decoded.code == scannedBarcode_) currentOrderPage_->showScannerMessage({});
 }
 
