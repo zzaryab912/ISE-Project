@@ -21,7 +21,7 @@
 #include <QEvent>
 #include <QFileInfo>
 #include <QFontDatabase>
-#include <QFormLayout>
+#include <QGridLayout>
 #include <QGraphicsDropShadowEffect>
 #include <QGuiApplication>
 #include <QImage>
@@ -379,6 +379,15 @@ QLineEdit* edit(QWidget* parent, QRect bounds, const QString& title, const QStri
         .arg(readOnly ? "#f2f2f2" : white ? "#ffffff" : "#fafafa",
              white ? "#d6d6d6" : "#e7e7e7"));
     return widget;
+}
+
+QLineEdit* pinInput(QWidget* parent, QRect bounds, const QString& caption)
+{
+    auto* field = edit(parent, bounds, caption, caption);
+    field->setEchoMode(QLineEdit::Password);
+    field->setMaxLength(4);
+    field->setValidator(new QRegularExpressionValidator(QRegularExpression("[0-9]{4}"), field));
+    return field;
 }
 
 QLineEdit* field(QWidget* parent, int x, int y, int width, const QString& title,
@@ -1282,16 +1291,12 @@ public:
 
     void showError(const string& message) override
     {
-        error_->setStyleSheet(QString("color:%1; background:transparent;").arg(errorInk));
-        error_->setText(text(message));
-        error_->setToolTip(text(message));
+        showFeedback(message, errorInk);
     }
 
     void showNotice(const string& message) override
     {
-        error_->setStyleSheet(QString("color:%1; background:transparent;").arg(detailMuted));
-        error_->setText(text(message));
-        error_->setToolTip(text(message));
+        showFeedback(message, detailMuted);
     }
 
     void showPdfRecoveryWarning(const string& message) override
@@ -1482,7 +1487,7 @@ public:
     {
         previewValid_ = false;
         approved_ = false;
-        if (summary_) summary_->clear();
+        if (summary_) summary_->setText("Change a quantity to preview the payment adjustment.");
         if (pin_) pin_->clear();
         synchronizeEditor();
     }
@@ -1540,7 +1545,6 @@ private:
     struct EditRow {
         SaleLine line;
         QLineEdit* quantity = nullptr;
-        QLabel* restockLabel = nullptr;
         QLineEdit* restock = nullptr;
     };
 
@@ -1560,6 +1564,7 @@ private:
     QPushButton* resume_ = nullptr;
     QPushButton* correction_ = nullptr;
     QLabel* summary_ = nullptr;
+    QLabel* editFeedback_ = nullptr;
     QLineEdit* pin_ = nullptr;
     QPushButton* approve_ = nullptr;
     QPushButton* commit_ = nullptr;
@@ -1574,6 +1579,14 @@ private:
     bool editBusy_ = false;
     int64_t settledDelta_ = 0;
 
+    void showFeedback(const string& message, const char* color)
+    {
+        auto* feedback = editFeedback_ ? editFeedback_ : error_;
+        feedback->setStyleSheet(QString("color:%1; background:transparent;").arg(color));
+        feedback->setText(text(message));
+        feedback->setToolTip(text(message));
+    }
+
     void resetEditor()
     {
         editing_ = false;
@@ -1581,6 +1594,7 @@ private:
         approved_ = false;
         editBusy_ = false;
         summary_ = nullptr;
+        editFeedback_ = nullptr;
         pin_ = nullptr;
         approve_ = nullptr;
         commit_ = nullptr;
@@ -1595,7 +1609,6 @@ private:
             row.quantity->setEnabled(!editBusy_);
             const auto quantity = quantityInput(row.quantity->text(), row.line.unit);
             const bool reduction = quantity.success && quantity.value < row.line.quantity;
-            row.restockLabel->setVisible(reduction);
             row.restock->setVisible(reduction);
             row.restock->setEnabled(!editBusy_);
         }
@@ -1641,61 +1654,112 @@ private:
         correction_->hide();
 
         auto* content = newRows(*bill_, 820);
+        content->setProperty("previousScroll", 0);
+        content->setStyleSheet("QLabel {color:#242424; background:transparent;}");
         auto* layout = new QVBoxLayout(content);
-        layout->setContentsMargins(28, 22, 20, 22);
-        auto* title = new QLabel("Edit Paid Quantities");
+        layout->setContentsMargins(28, 22, 20, 24);
+        layout->setSpacing(12);
+        auto* title = new QLabel("Edit Paid Quantities", content);
         title->setFont(interfaceFont(20, QFont::DemiBold));
-        title->setStyleSheet("color:#242424;");
         layout->addWidget(title);
-        auto* form = new QFormLayout;
-        form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+        auto* orderLabel = new QLabel("Order #" + text(order_->ids.orderId), content);
+        orderLabel->setFont(interfaceFont(13));
+        orderLabel->setStyleSheet("color:#686868;");
+        layout->addWidget(orderLabel);
+        layout->addSpacing(4);
+
+        auto* form = new QGridLayout;
+        form->setHorizontalSpacing(16);
+        form->setVerticalSpacing(10);
+        form->setColumnStretch(0, 1);
+        constexpr int quantityWidth = 144;
+        form->setColumnMinimumWidth(1, quantityWidth);
+        form->setColumnMinimumWidth(2, quantityWidth);
+        const std::array<const char*, 3> headings{"Product", "Revised quantity", "Restock quantity"};
+        for (size_t i = 0; i < headings.size(); ++i) {
+            auto* caption = new QLabel(headings[i], content);
+            caption->setFont(interfaceFont(13, QFont::Medium));
+            caption->setStyleSheet("color:#686868;");
+            form->addWidget(caption, 0, static_cast<int>(i));
+        }
+        int row = 1;
         for (const auto& line : order_->lines) {
-            auto* fields = new QWidget;
-            auto* inputs = new QHBoxLayout(fields);
-            inputs->setContentsMargins(0, 0, 0, 0);
-            auto* quantity = new QLineEdit(quantityText(line.quantity, line.unit));
-            auto* restock = new QLineEdit(quantityText(0, line.unit));
-            quantity->setAccessibleName("Revised quantity for " + text(line.name));
-            restock->setAccessibleName("Restock quantity for " + text(line.name));
+            auto* quantity = edit(content, {}, "Revised quantity for " + text(line.name));
+            auto* restock = edit(content, {}, "Restock quantity for " + text(line.name));
+            quantity->setText(quantityText(line.quantity, line.unit));
+            restock->setText(quantityText(0, line.unit));
             quantity->setValidator(new QRegularExpressionValidator(quantityPattern(line.unit), quantity));
             restock->setValidator(new QRegularExpressionValidator(quantityPattern(line.unit), restock));
-            auto* restockLabel = new QLabel("Restock");
-            inputs->addWidget(new QLabel("New qty"));
-            inputs->addWidget(quantity);
-            inputs->addWidget(restockLabel);
-            inputs->addWidget(restock);
-            auto* label = new QLabel(text(line.name) + "\n" + quantityText(line.quantity, line.unit) + " " + unitShort(line.unit));
-            label->setTextFormat(Qt::PlainText);
-            label->setWordWrap(true);
-            form->addRow(label, fields);
-            editRows_.push_back({line, quantity, restockLabel, restock});
+            for (auto* input : {quantity, restock}) {
+                input->setFixedSize(quantityWidth, 39);
+                input->setAlignment(Qt::AlignRight);
+            }
+            auto* product = new QWidget(content);
+            auto* productLayout = new QVBoxLayout(product);
+            productLayout->setContentsMargins(0, 0, 0, 0);
+            productLayout->setSpacing(3);
+            auto* name = new QLabel(text(line.name), product);
+            name->setTextFormat(Qt::PlainText);
+            name->setWordWrap(true);
+            name->setFont(interfaceFont(14, QFont::Medium));
+            productLayout->addWidget(name);
+            auto* original = new QLabel("Current quantity  " + quantityText(line.quantity, line.unit) +
+                                        " " + unitShort(line.unit), product);
+            original->setFont(interfaceFont(13));
+            original->setStyleSheet("color:#686868;");
+            productLayout->addWidget(original);
+            form->addWidget(product, row, 0);
+            form->addWidget(quantity, row, 1, Qt::AlignVCenter);
+            form->addWidget(restock, row, 2, Qt::AlignVCenter);
+            restock->hide();
+            editRows_.push_back({line, quantity, restock});
             connect(quantity, &QLineEdit::textEdited, this, [this] { changePreview(); });
             connect(restock, &QLineEdit::textEdited, this, [this] { changePreview(); });
+            ++row;
         }
         layout->addLayout(form);
-        summary_ = new QLabel;
+        summary_ = new QLabel("Change a quantity to preview the payment adjustment.", content);
         summary_->setTextFormat(Qt::PlainText);
         summary_->setWordWrap(true);
-        summary_->setMinimumHeight(82);
+        summary_->setFont(interfaceFont(14));
+        summary_->setMinimumHeight(96);
+        summary_->setStyleSheet("color:#242424; background:#f5f7f7; border:1px solid #e5eaea;"
+                                "border-radius:10px; padding:10px 14px;");
         layout->addWidget(summary_);
+        auto* pinLabel = new QLabel("Manager PIN", content);
+        pinLabel->setFont(interfaceFont(13, QFont::Medium));
+        layout->addWidget(pinLabel);
+        pin_ = pinInput(content, {0, 0, 210, 40}, "Manager PIN");
+        pin_->setPlaceholderText("Enter four digits");
+        pin_->setFixedSize(210, 40);
+        pinLabel->setBuddy(pin_);
+        approve_ = action(content, {0, 0, 112, 40}, "Approve");
+        approve_->setFixedSize(112, 40);
+        auto* approval = new QHBoxLayout;
+        approval->setSpacing(10);
+        approval->addWidget(pin_);
+        approval->addWidget(approve_);
+        approval->addStretch();
+        layout->addLayout(approval);
+        editFeedback_ = new QLabel(content);
+        editFeedback_->setFont(interfaceFont(13));
+        editFeedback_->setWordWrap(true);
+        editFeedback_->setFixedHeight(36);
+        layout->addWidget(editFeedback_);
+        auto* divider = new QWidget(content);
+        divider->setFixedHeight(1);
+        divider->setStyleSheet("background:#e6e6e6;");
+        layout->addWidget(divider);
 
         auto* controls = new QHBoxLayout;
-        pin_ = new QLineEdit;
-        pin_->setEchoMode(QLineEdit::Password);
-        pin_->setMaxLength(4);
-        pin_->setPlaceholderText("Manager PIN");
-        pin_->setAccessibleName("Manager PIN");
-        pin_->setValidator(new QRegularExpressionValidator(QRegularExpression("[0-9]{4}"), pin_));
-        approve_ = new QPushButton("Approve");
-        commit_ = new QPushButton("Confirm Settlement");
-        cancel_ = new QPushButton("Cancel");
-        for (auto* button : {approve_, commit_, cancel_}) button->setMinimumHeight(39);
-        controls->addWidget(pin_, 1);
-        controls->addWidget(approve_);
-        controls->addWidget(commit_);
+        commit_ = action(content, {0, 0, 178, 42}, "Confirm Settlement", Action::Primary);
+        cancel_ = action(content, {0, 0, 100, 42}, "Cancel");
+        commit_->setFixedSize(178, 42);
+        cancel_->setFixedSize(100, 42);
         controls->addWidget(cancel_);
+        controls->addStretch();
+        controls->addWidget(commit_);
         layout->addLayout(controls);
-        layout->addStretch();
 
         connect(approve_, &QPushButton::clicked, this, [this] { window_.onApprovePaidEdit(pin_->text().toStdString()); });
         connect(commit_, &QPushButton::clicked, this, [this] {
@@ -1710,8 +1774,10 @@ private:
                 window_.onOrderSelected(id);
             }
         });
-        finishRows(*bill_, *content, std::max(600, layout->sizeHint().height()));
+        const int height = std::max(layout->sizeHint().height(), layout->heightForWidth(content->width()));
+        finishRows(*bill_, *content, height);
         synchronizeEditor();
+        if (!editRows_.empty()) editRows_.front().quantity->setFocus();
     }
 };
 
@@ -1751,15 +1817,6 @@ private:
     QImage image_;
     int radius_;
 };
-
-QLineEdit* pinInput(QWidget* parent, QRect bounds, const QString& caption)
-{
-    auto* field = edit(parent, bounds, caption, caption);
-    field->setEchoMode(QLineEdit::Password);
-    field->setMaxLength(4);
-    field->setValidator(new QRegularExpressionValidator(QRegularExpression("[0-9]{4}"), field));
-    return field;
-}
 
 class LaunchPage final : public QWidget {
 public:

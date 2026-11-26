@@ -179,9 +179,9 @@ ManagerCataloguePage::ManagerCataloguePage(ProductService& products, DiscountSer
         QPushButton#catalogueSecondary:focus { border-color:#858585; }
         QPushButton#catalogueSecondary:disabled { background:#f2f2f2; color:#767676; }
         QCheckBox { color:#242424; spacing:8px; }
-        QCheckBox::indicator { width:16px; height:16px; border-radius:4px;
+        QCheckBox::indicator { width:16px; height:16px; border-radius:6px;
             background:#ffffff; border:1px solid #a0abaa; }
-        QCheckBox::indicator:checked { background:#4e6766; border:3px solid #e5ebea; }
+        QCheckBox::indicator:checked { background:#4e6766; border:3px solid #e5ebea; border-radius:7px; }
         QCheckBox::indicator:hover { border-color:#466765; }
         QTableWidget { border:none; background:white; color:#242424; outline:none;
             selection-background-color:#e8eeee; selection-color:#242424; }
