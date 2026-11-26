@@ -167,11 +167,10 @@ QFont interfaceFont(int pixels, QFont::Weight weight = QFont::Normal)
 {
     QFont result = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
     result.setPixelSize(pixels);
+    if (weight == QFont::DemiBold && pixels >= 18 && pixels <= 28)
+        weight = QFont::Medium;
     result.setWeight(static_cast<QFont::Weight>(std::max(300, static_cast<int>(weight) - 65)));
     result.setHintingPreference(QFont::PreferNoHinting);
-    if (weight == QFont::DemiBold && pixels >= 18 && pixels <= 28) {
-        result.setStretch(103);
-    }
     return result;
 }
 
@@ -917,16 +916,14 @@ public:
         auto* product = panel(this, {1022, 370, 480, 588}, "#ffffff", "#e3e3e3");
         label(product, {24, 24, 430, 24}, "Scanned product", 20, ink, QFont::DemiBold);
         productName_ = label(product, {24, 68, 432, 39}, "Scan a barcode to select a product.",
-                             18, ink, QFont::DemiBold, Qt::AlignLeft | Qt::AlignTop);
+                             16, detailInk, QFont::Normal, Qt::AlignLeft | Qt::AlignTop);
         productName_->setWordWrap(true);
         productPriceLabel_ = label(product, {24, 110, 215, 17}, "Price / item (excl. tax)", 14, muted);
         productPrice_ = label(product, {260, 110, 196, 17}, "—", 14, ink, QFont::Medium, right_);
-        auto* description = action(product, {24, 205, 432, 38}, "Description  ▾", Action::Secondary);
-        description->setCheckable(true);
-        description->setChecked(true);
+        rule(product, 24, 211, 432);
+        label(product, {24, 225, 432, 19}, "Description", 15, detailInk, QFont::Medium);
         auto* details = new QWidget(product);
-        details->setGeometry(24, 250, 432, 242);
-        connect(description, &QPushButton::toggled, details, &QWidget::setVisible);
+        details->setGeometry(24, 255, 432, 242);
         const QStringList detailLabels{"Product ID", "Acronym", "Barcode", "Measurement unit",
                                        "Available stock", "Unit price", "Tax rate", "Product discount"};
         for (int i = 0; i < detailLabels.size(); ++i) {
@@ -989,6 +986,7 @@ public:
     {
         const auto& product = item.product;
         stockSummary_->setText("Available stock   " + availability(item));
+        productName_->setFont(interfaceFont(18, QFont::Medium));
         productName_->setText(text(product.name));
         productName_->setToolTip(text(product.name));
         productPriceLabel_->setText("Price / " + unitShort(product.unit) + " (excl. tax)");
@@ -1978,7 +1976,10 @@ PosWindow::PosWindow(ProductService& products, DiscountService& discounts, CartS
     wordmark->setObjectName("eyerisWordmark");
     wordmark->setAccessibleName("Eyeris");
     for (const char* name : pageNames) {
-        auto* link = action(sidebar_, {11, 99, 186, 42}, QString::fromLatin1(name), Action::Navigation);
+        const auto title = QString::fromLatin1(name);
+        auto* link = action(sidebar_, {11, 99, 186, 42},
+                            QString(title).replace("&", "&&"), Action::Navigation);
+        link->setAccessibleName(title);
         navigation_.push_back(link);
         connect(link, &QPushButton::clicked, this, [this, destination = string(name)] { showPage(destination); });
     }

@@ -15,9 +15,19 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QTableWidget;
+class QVBoxLayout;
 
 class ManagerCataloguePage final : public QWidget {
 private:
+    struct SeasonEditor {
+        QWidget* form = nullptr;
+        QDateEdit* start = nullptr;
+        QDateEdit* end = nullptr;
+        QLineEdit* rate = nullptr;
+        QCheckBox* enabled = nullptr;
+        QLabel* feedback = nullptr;
+    };
+
     ProductService& products_;
     DiscountService& discounts_;
     optional<Product> selectedProduct_;
@@ -44,13 +54,10 @@ private:
     QLabel* barcode_ = nullptr;
     QLabel* barcodeStatus_ = nullptr;
     QComboBox* seasonChoice_ = nullptr;
-    QDateEdit* seasonStart_ = nullptr;
-    QDateEdit* seasonEnd_ = nullptr;
-    QLineEdit* seasonRate_ = nullptr;
-    QCheckBox* seasonActive_ = nullptr;
+    SeasonEditor existingSeason_;
+    SeasonEditor newSeason_;
     QLineEdit* specialRate_ = nullptr;
     QCheckBox* specialActive_ = nullptr;
-    QLabel* seasonFeedback_ = nullptr;
     QLabel* specialFeedback_ = nullptr;
     QLabel* feedback_ = nullptr;
     QLabel* categoryFeedback_ = nullptr;
@@ -62,7 +69,9 @@ private:
     void showProductMessage(const string& message, bool success);
     void showCategoryMessage(const string& message, bool success);
     QWidget* createDiscountsTab();
-    void refreshSeasons();
+    void addSeasonEditor(QVBoxLayout& layout, SeasonEditor& editor, bool creating);
+    void submitSeason(SeasonEditor& editor, const optional<Season>& original);
+    void refreshSeasons(bool keepDraft = false);
     void refreshSpecial();
     void showSeason(int index);
     Result<Product> readProduct() const;

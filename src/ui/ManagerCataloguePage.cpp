@@ -112,11 +112,13 @@ QTableWidget* table(const QStringList& headers)
     auto* rows = new QTableWidget(0, headers.size());
     rows->setHorizontalHeaderLabels(headers);
     rows->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    rows->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     rows->verticalHeader()->hide();
+    rows->verticalHeader()->setDefaultSectionSize(44);
     rows->setEditTriggers(QAbstractItemView::NoEditTriggers);
     rows->setSelectionBehavior(QAbstractItemView::SelectRows);
     rows->setSelectionMode(QAbstractItemView::SingleSelection);
-    rows->setAlternatingRowColors(true);
+    rows->setShowGrid(false);
     return rows;
 }
 
@@ -156,13 +158,13 @@ ManagerCataloguePage::ManagerCataloguePage(ProductService& products, DiscountSer
     setStyleSheet(R"(
         QLabel { background:transparent; color:#242424; font-size:14px; }
         QLabel#catalogueHeading { font-size:36px; font-weight:500; }
-        QLabel#catalogueTitle { font-size:20px; font-weight:600; }
+        QLabel#catalogueTitle { font-size:20px; font-weight:500; }
         QLabel#catalogueHint { color:#656565; }
         QFrame#catalogueCard { background:white; border:1px solid #e3e3e3; border-radius:21px; }
         QFrame#catalogueDivider { background:#e6e6e6; border:none; }
         QTabBar::tab { background:transparent; padding:0 20px 0 0; min-height:34px;
             color:#686868; border-bottom:2px solid transparent; margin-right:14px; }
-        QTabBar::tab:selected { border-bottom-color:#242424; font-weight:600; color:#242424; }
+        QTabBar::tab:selected { border-bottom-color:#242424; font-weight:500; color:#242424; }
         QTabBar::tab:focus { color:#242424; }
         QLineEdit, QDateEdit { padding:0 12px; background:#fafafa;
             border:1px solid #e3e3e3; border-radius:8px; color:#252525; }
@@ -181,10 +183,12 @@ ManagerCataloguePage::ManagerCataloguePage(ProductService& products, DiscountSer
             background:#ffffff; border:1px solid #a0abaa; }
         QCheckBox::indicator:checked { background:#4e6766; border:3px solid #e5ebea; }
         QCheckBox::indicator:hover { border-color:#466765; }
-        QTableWidget { border:none; background:white; alternate-background-color:#fafafa;
+        QTableWidget { border:none; background:white; color:#242424; outline:none;
             selection-background-color:#e8eeee; selection-color:#242424; }
-        QHeaderView::section { background:#f7f7f7; border:none; border-bottom:1px solid #e6e6e6;
-            padding:8px 6px; color:#4d4d4d; }
+        QTableWidget::item { color:#242424; padding:0 10px; border:none; border-bottom:1px solid #e9e9e9; }
+        QTableWidget::item:selected { background:#eef2f2; color:#242424; }
+        QHeaderView::section { background:white; border:none; border-bottom:1px solid #e3e3e3;
+            padding:9px 10px; color:#656565; font-size:13px; font-weight:500; }
     )");
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -541,37 +545,25 @@ QWidget* ManagerCataloguePage::createDiscountsTab()
     columns->setContentsMargins(0, 0, 0, 0);
     columns->setSpacing(24);
 
-    QVBoxLayout* seasonLayout;
-    auto* seasonal = card(seasonLayout);
-    columns->addWidget(seasonal, 3, Qt::AlignTop);
-    seasonLayout->addWidget(caption("Seasonal discount", "catalogueTitle"));
-    seasonLayout->addWidget(caption("Set the date range and percentage for one active season.", "catalogueHint"));
-    seasonLayout->addSpacing(7);
-    auto* selection = new QHBoxLayout;
-    selection->setSpacing(12);
+    auto* seasonal = new QVBoxLayout;
+    seasonal->setSpacing(24);
+    columns->addLayout(seasonal, 3);
+    QVBoxLayout* savedLayout;
+    seasonal->addWidget(card(savedLayout));
+    savedLayout->addWidget(caption("Saved seasons", "catalogueTitle"));
+    savedLayout->addSpacing(4);
     seasonChoice_ = PosUi::choice("Season");
-    auto* add = secondaryButton("Add Season");
-    selection->addWidget(field("Season", seasonChoice_), 1);
-    selection->addWidget(add, 0, Qt::AlignBottom);
-    seasonLayout->addLayout(selection);
+    seasonChoice_->setPlaceholderText("No saved seasons");
+    savedLayout->addWidget(field("Season", seasonChoice_));
+    addSeasonEditor(*savedLayout, existingSeason_, false);
 
-    auto* dates = new QHBoxLayout;
-    dates->setSpacing(16);
-    seasonStart_ = PosUi::dateEditor(QDate::currentDate());
-    seasonEnd_ = PosUi::dateEditor(QDate::currentDate());
-    seasonRate_ = new QLineEdit;
-    dates->addWidget(field("Starts", seasonStart_), 1);
-    dates->addWidget(field("Ends", seasonEnd_), 1);
-    dates->addWidget(field("Discount (%)", seasonRate_), 1);
-    seasonLayout->addLayout(dates);
-    seasonActive_ = new QCheckBox("Enable this season");
-    seasonLayout->addWidget(seasonActive_);
-    seasonFeedback_ = caption({});
-    seasonFeedback_->hide();
-    seasonLayout->addWidget(seasonFeedback_);
-    seasonLayout->addWidget(divider());
-    auto* saveSeasonButton = PosUi::primaryButton("Save Season");
-    seasonLayout->addWidget(saveSeasonButton, 0, Qt::AlignRight);
+    QVBoxLayout* createLayout;
+    seasonal->addWidget(card(createLayout));
+    createLayout->addWidget(caption("Create a season", "catalogueTitle"));
+    createLayout->addWidget(caption("Only one season can be enabled at a time.", "catalogueHint"));
+    createLayout->addSpacing(4);
+    addSeasonEditor(*createLayout, newSeason_, true);
+    seasonal->addStretch(1);
 
     QVBoxLayout* specialLayout;
     auto* special = card(specialLayout);
@@ -592,24 +584,6 @@ QWidget* ManagerCataloguePage::createDiscountsTab()
     specialLayout->addWidget(saveSpecialButton, 0, Qt::AlignRight);
 
     connect(seasonChoice_, &QComboBox::currentIndexChanged, this, &ManagerCataloguePage::showSeason);
-    connect(add, &QPushButton::clicked, this, [this] {
-        seasonChoice_->setCurrentIndex(0);
-        showSeason(0);
-        seasonStart_->setFocus();
-    });
-    connect(saveSeasonButton, &QPushButton::clicked, this, [this] {
-        const auto rate = decimalInput(seasonRate_->text(), 2);
-        if (!rate.success || rate.value > 10000 || !seasonStart_->hasAcceptableInput() ||
-            !seasonEnd_->hasAcceptableInput() || seasonStart_->date() > seasonEnd_->date()) {
-            message(*seasonFeedback_, "Enter a valid date range and a discount from 0% to 100%.", false);
-            return;
-        }
-        saveSeason(selectedSeason_, {
-            seasonStart_->date().toString(Qt::ISODate).toStdString(),
-            seasonEnd_->date().toString(Qt::ISODate).toStdString(),
-            static_cast<int32_t>(rate.value), seasonActive_->isChecked()
-        });
-    });
     connect(saveSpecialButton, &QPushButton::clicked, this, [this] {
         const auto rate = decimalInput(specialRate_->text(), 2);
         if (!rate.success || rate.value > 800) {
@@ -621,40 +595,96 @@ QWidget* ManagerCataloguePage::createDiscountsTab()
     return page;
 }
 
-void ManagerCataloguePage::refreshSeasons()
+void ManagerCataloguePage::addSeasonEditor(QVBoxLayout& layout, SeasonEditor& editor, bool creating)
+{
+    const auto today = QDate::currentDate();
+    editor.form = new QWidget;
+    editor.form->setAccessibleName(creating ? "New season form" : "Saved season form");
+    auto* formLayout = new QVBoxLayout(editor.form);
+    formLayout->setContentsMargins(0, 0, 0, 0);
+    formLayout->setSpacing(9);
+    auto* dates = new QHBoxLayout;
+    dates->setSpacing(16);
+    editor.start = PosUi::dateEditor(today);
+    editor.end = PosUi::dateEditor(today);
+    editor.rate = new QLineEdit("0.00");
+    dates->addWidget(field("Starts", editor.start), 1);
+    dates->addWidget(field("Ends", editor.end), 1);
+    dates->addWidget(field("Discount (%)", editor.rate), 1);
+    formLayout->addLayout(dates);
+    editor.enabled = new QCheckBox("Enable this season");
+    formLayout->addWidget(editor.enabled);
+    formLayout->addWidget(divider());
+    auto* save = PosUi::primaryButton(creating ? "Create Season" : "Save Changes");
+    formLayout->addWidget(save, 0, Qt::AlignRight);
+    layout.addWidget(editor.form);
+    editor.feedback = caption({});
+    editor.feedback->hide();
+    layout.addWidget(editor.feedback);
+    connect(save, &QPushButton::clicked, this, [this, creating] {
+        if (creating) submitSeason(newSeason_, nullopt);
+        else if (selectedSeason_) submitSeason(existingSeason_, selectedSeason_);
+    });
+}
+
+void ManagerCataloguePage::submitSeason(SeasonEditor& editor, const optional<Season>& original)
+{
+    const auto rate = decimalInput(editor.rate->text(), 2);
+    if (!rate.success || rate.value > 10000 || !editor.start->hasAcceptableInput() ||
+        !editor.end->hasAcceptableInput() || editor.start->date() > editor.end->date()) {
+        message(*editor.feedback, "Enter a valid date range and a discount from 0% to 100%.", false);
+        return;
+    }
+    saveSeason(original, {
+        editor.start->date().toString(Qt::ISODate).toStdString(),
+        editor.end->date().toString(Qt::ISODate).toStdString(),
+        static_cast<int32_t>(rate.value), editor.enabled->isChecked()
+    });
+}
+
+void ManagerCataloguePage::refreshSeasons(bool keepDraft)
 {
     const auto result = discounts_.listSeasons();
     if (!result.success) {
-        message(*seasonFeedback_, result.message, false);
+        message(*existingSeason_.feedback, result.message, false);
         return;
     }
     seasons_ = result.value;
     const QSignalBlocker blocker(seasonChoice_);
     seasonChoice_->clear();
-    seasonChoice_->addItem("New season");
-    int preferred = 0;
+    int preferred = -1;
+    int active = -1;
     for (const auto& season : seasons_) {
         const auto start = QDate::fromString(text(season.startDate), Qt::ISODate);
         const auto end = QDate::fromString(text(season.endDate), Qt::ISODate);
         seasonChoice_->addItem(start.toString("d MMM yyyy") + " – " + end.toString("d MMM yyyy") +
             (season.active ? " · Active" : ""));
+        if (season.active) active = seasonChoice_->count() - 1;
         if (selectedSeason_ && season.startDate == selectedSeason_->startDate &&
             season.endDate == selectedSeason_->endDate) preferred = seasonChoice_->count() - 1;
     }
+    if (preferred < 0 && !seasons_.empty()) preferred = active >= 0 ? active : 0;
+    seasonChoice_->setEnabled(!seasons_.empty());
     seasonChoice_->setCurrentIndex(preferred);
+    if (keepDraft && selectedSeason_ && preferred >= 0) {
+        const auto& current = seasons_[static_cast<size_t>(preferred)];
+        if (current.startDate == selectedSeason_->startDate && current.endDate == selectedSeason_->endDate &&
+            current.rate == selectedSeason_->rate && current.active == selectedSeason_->active) return;
+    }
     showSeason(preferred);
 }
 
 void ManagerCataloguePage::showSeason(int index)
 {
-    selectedSeason_ = index > 0 && static_cast<size_t>(index) <= seasons_.size() ?
-        optional<Season>(seasons_[static_cast<size_t>(index - 1)]) : nullopt;
-    const auto today = QDate::currentDate();
-    seasonStart_->setDate(selectedSeason_ ? QDate::fromString(text(selectedSeason_->startDate), Qt::ISODate) : today);
-    seasonEnd_->setDate(selectedSeason_ ? QDate::fromString(text(selectedSeason_->endDate), Qt::ISODate) : today);
-    seasonRate_->setText(fixed(selectedSeason_ ? selectedSeason_->rate : 0));
-    seasonActive_->setChecked(selectedSeason_ && selectedSeason_->active);
-    seasonFeedback_->hide();
+    selectedSeason_ = index >= 0 && static_cast<size_t>(index) < seasons_.size() ?
+        optional<Season>(seasons_[static_cast<size_t>(index)]) : nullopt;
+    existingSeason_.form->setVisible(selectedSeason_.has_value());
+    existingSeason_.feedback->hide();
+    if (!selectedSeason_) return;
+    existingSeason_.start->setDate(QDate::fromString(text(selectedSeason_->startDate), Qt::ISODate));
+    existingSeason_.end->setDate(QDate::fromString(text(selectedSeason_->endDate), Qt::ISODate));
+    existingSeason_.rate->setText(fixed(selectedSeason_->rate));
+    existingSeason_.enabled->setChecked(selectedSeason_->active);
 }
 
 void ManagerCataloguePage::refreshSpecial()
@@ -670,12 +700,22 @@ void ManagerCataloguePage::refreshSpecial()
 
 void ManagerCataloguePage::saveSeason(const optional<Season>& original, const Season& replacement)
 {
+    const bool editing = original.has_value();
     const auto result = discounts_.saveSeason(original, replacement);
     if (result.success) {
-        selectedSeason_ = replacement;
-        refreshSeasons();
+        if (editing) selectedSeason_ = replacement;
+        refreshSeasons(!editing);
+        if (!editing) {
+            const auto today = QDate::currentDate();
+            newSeason_.start->setDate(today);
+            newSeason_.end->setDate(today);
+            newSeason_.rate->setText("0.00");
+            newSeason_.enabled->setChecked(false);
+        }
     }
-    message(*seasonFeedback_, result.success ? "Season saved." : result.message, result.success);
+    auto* feedback = editing ? existingSeason_.feedback : newSeason_.feedback;
+    message(*feedback, result.success ? (editing ? "Changes saved." : "Season created.") : result.message,
+            result.success);
 }
 
 void ManagerCataloguePage::saveSpecial(const SpecialDiscount& special)

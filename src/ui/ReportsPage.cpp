@@ -94,8 +94,8 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     setStyleSheet(R"(
         QLabel { color: #272727; font-size: 14px; background: transparent; }
         QLabel#reportHeading { font-size: 36px; font-weight: 500; }
-        QLabel#reportTitle { font-size: 20px; font-weight: 600; }
-        QLabel#reportFigure { font-size: 19px; font-weight: 600; }
+        QLabel#reportTitle { font-size: 20px; font-weight: 500; }
+        QLabel#reportFigure { font-size: 19px; font-weight: 500; }
         QLabel#reportSubtle { color: #646464; }
         QLabel#reportError { color: #a22922; }
         QFrame#reportCard { background: white; border: 1px solid #e3e3e3; border-radius: 21px; }
@@ -110,9 +110,12 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
             background:#ffffff; border:1px solid #a0abaa; }
         QCheckBox::indicator:checked { background:#4e6766; border:3px solid #e5ebea; }
         QCheckBox::indicator:hover { border-color:#466765; }
-        QTableWidget { border: none; background: white; alternate-background-color: #fafafa; }
-        QHeaderView::section { background: #f5f5f5; border: none; border-bottom: 1px solid #e4e4e4;
-            padding: 10px 8px; color: #4d4d4d; text-align: left; }
+        QTableWidget { border:none; background:white; color:#242424; outline:none;
+            selection-background-color:#eef2f2; selection-color:#242424; }
+        QTableWidget::item { color:#242424; padding:0 10px; border:none; border-bottom:1px solid #e9e9e9; }
+        QTableWidget::item:selected { background:#eef2f2; color:#242424; }
+        QHeaderView::section { background:white; border:none; border-bottom:1px solid #e3e3e3;
+            padding:9px 10px; color:#656565; font-size:13px; font-weight:500; }
     )");
 
     auto* page = new QVBoxLayout(this);
@@ -206,7 +209,7 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     saleTotals_ = new QWidget;
     auto* totalsLayout = new QHBoxLayout(saleTotals_);
     totalsLayout->setContentsMargins(0, 4, 0, 8);
-    const array<const char*, 4> totalTitles = {"Gross sales", "Total discounts", "Refunds", "Net collections"};
+    const array<const char*, 4> totalTitles = {"Collected", "Total discounts", "Refunds", "Net collections"};
     for (size_t i = 0; i < totalTitles.size(); ++i) {
         auto* tile = new QFrame;
         tile->setObjectName("reportTile");
@@ -224,8 +227,10 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     table_->setAccessibleName("Report output");
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    table_->setAlternatingRowColors(true);
+    table_->setShowGrid(false);
     table_->verticalHeader()->hide();
+    table_->verticalHeader()->setDefaultSectionSize(44);
+    table_->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     table_->hide();
     outputLayout->addWidget(title_);
@@ -370,7 +375,7 @@ void ReportsPage::showResult(const ReportResult& report)
     else if (kind == ReportKind::HighestStock || kind == ReportKind::LowestStock)
         totals = "Out of stock  " + QString::number(report.outOfStockCount);
     else if (kind != ReportKind::PaymentMix && kind != ReportKind::TopSold) {
-        const array<int64_t, 4> figures{report.billTotal, report.totalDiscount, report.refunded, report.netCollections};
+        const array<int64_t, 4> figures{report.collected, report.totalDiscount, report.refunded, report.netCollections};
         for (size_t i = 0; i < figures.size(); ++i) totalValues_[i]->setText(amount(figures[i]));
         refundTitle_->setText("Refunds (" + QString::number(report.refundCount) + ")");
         saleTotals_->show();
