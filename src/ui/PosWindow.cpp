@@ -402,47 +402,35 @@ QLineEdit* field(QWidget* parent, int x, int y, int width, const QString& title,
     return widget;
 }
 
-constexpr int choiceDetailRole = Qt::UserRole + 1;
+constexpr int choiceRowHeight = 40;
 
 class ChoiceRows final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
 
-    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex& index) const override
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override
     {
-        return {0, index.data(choiceDetailRole).toString().isEmpty() ? 40 : 56};
+        return {0, choiceRowHeight};
     }
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         const bool chosen = index.data(Qt::UserRole).toBool();
         const bool highlighted = option.state & (QStyle::State_Selected | QStyle::State_MouseOver);
-        const QString detail = index.data(choiceDetailRole).toString();
-        const QRect row = option.rect.adjusted(0, detail.isEmpty() ? 1 : 2, -1, -2);
+        const QRect row = option.rect.adjusted(0, 1, -1, -2);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
-        if (!detail.isEmpty()) {
-            painter->setPen(QColor(highlighted ? "#c9d9d7" : "#e4e4e4"));
-            painter->setBrush(QColor(highlighted ? "#ebf2f1" : "#ffffff"));
-            painter->drawRoundedRect(row, 8, 8);
-        } else if (chosen || highlighted) {
+        if (chosen || highlighted) {
             painter->setPen(Qt::NoPen);
             painter->setBrush(QColor(chosen ? "#e9e9e9" : "#efefef"));
             painter->drawRoundedRect(row, 7, 7);
         }
         painter->setPen(QColor(ink));
-        painter->setFont(interfaceFont(14, chosen || !detail.isEmpty() ? QFont::Medium : QFont::Normal));
+        painter->setFont(interfaceFont(14, chosen ? QFont::Medium : QFont::Normal));
         const auto bounds = row.adjusted(11, 0, chosen ? -32 : -11, 0);
         const auto content = painter->fontMetrics().elidedText(index.data(Qt::DisplayRole).toString(),
                                                               Qt::ElideRight, bounds.width());
-        const auto title = detail.isEmpty() ? bounds : bounds.adjusted(0, 7, 0, -24);
-        painter->drawText(title, Qt::AlignVCenter, content);
-        if (!detail.isEmpty()) {
-            painter->setFont(interfaceFont(12));
-            painter->setPen(QColor(detailMuted));
-            painter->drawText(bounds.adjusted(0, 26, 0, -5), Qt::AlignVCenter,
-                              painter->fontMetrics().elidedText(detail, Qt::ElideRight, bounds.width()));
-        }
+        painter->drawText(bounds, Qt::AlignVCenter, content);
         if (chosen) {
             const QPointF end(row.right() - 15, row.center().y() - 4);
             QPainterPath tick;
@@ -537,43 +525,27 @@ public:
 
     void showPopup() override
     {
-        showChoices(width());
-    }
-
-    void hidePopup() override
-    {
-        if (popup_) popup_->hide();
-        QComboBox::hidePopup();
-    }
-
-    bool popupOpen() const { return menuOpen_; }
-
-protected:
-    void showChoices(int preferredWidth)
-    {
         if (count() == 0 || !isEnabled()) return;
         if (!popup_) createPopup();
         rows_->clear();
         for (int index = 0; index < count(); ++index) {
             auto* row = new QListWidgetItem(itemText(index), rows_);
             row->setData(Qt::UserRole, index == currentIndex());
-            const QVariant detail = itemData(index, choiceDetailRole);
-            row->setData(choiceDetailRole, detail);
-            if (detail.isValid()) row->setData(Qt::AccessibleDescriptionRole, detail);
+            row->setToolTip(itemData(index, Qt::ToolTipRole).toString());
+            row->setData(Qt::AccessibleTextRole, itemData(index, Qt::AccessibleTextRole));
         }
         rows_->setCurrentRow(std::max(0, currentIndex()));
-        const int rowHeight = rows_->sizeHintForRow(0);
-        int bodyHeight = std::min(count(), 8) * rowHeight + 12;
+        int bodyHeight = std::min(count(), 8) * choiceRowHeight + 12;
         const auto* screen = QGuiApplication::screenAt(mapToGlobal(rect().center()));
-        int bodyWidth = screen ? std::min(preferredWidth, screen->availableGeometry().width()) : preferredWidth;
-        QPoint position = mapToGlobal(QPoint(width() - bodyWidth, height() + 5));
+        const int bodyWidth = screen ? std::min(width(), screen->availableGeometry().width()) : width();
+        QPoint position = mapToGlobal(QPoint(0, height() + 5));
         if (screen) {
             const QRect available = screen->availableGeometry();
             const QPoint control = mapToGlobal(QPoint());
             const int below = available.bottom() + 1 - position.y();
             const int above = control.y() - available.top() - 5;
             const bool opensAbove = below < bodyHeight && above > below;
-            bodyHeight = std::max(rowHeight + 12, std::min(bodyHeight, opensAbove ? above : below));
+            bodyHeight = std::max(choiceRowHeight + 12, std::min(bodyHeight, opensAbove ? above : below));
             if (opensAbove) position.setY(control.y() - bodyHeight - 5);
             position.setX(std::clamp(position.x(), available.left(), available.right() - bodyWidth + 1));
             position.setY(std::clamp(position.y(), available.top(),
@@ -589,6 +561,15 @@ protected:
         rows_->setFocus(Qt::PopupFocusReason);
     }
 
+    void hidePopup() override
+    {
+        if (popup_) popup_->hide();
+        QComboBox::hidePopup();
+    }
+
+    bool popupOpen() const { return menuOpen_; }
+
+protected:
     void paintEvent(QPaintEvent* event) override
     {
         QComboBox::paintEvent(event);
@@ -692,13 +673,19 @@ public:
     void showOrders(const vector<SaleRecord>& orders)
     {
         clear();
+        const auto metrics = fontMetrics();
         for (const auto& order : orders) {
-            addItem(text(order.customer.name), text(order.ids.orderId));
-            setItemData(count() - 1, "#" + text(order.ids.orderId) + "  ·  PKR " +
-                        formattedMoney(order.totals.payable), choiceDetailRole);
+            const auto suffix = "  ·  #" + text(order.ids.orderId);
+            const auto name = text(order.customer.name);
+            const auto compactName = metrics.elidedText(name, Qt::ElideRight,
+                width() - 42 - metrics.horizontalAdvance(suffix));
+            addItem(compactName + suffix, text(order.ids.orderId));
+            const auto details = name + suffix + "  ·  PKR " + formattedMoney(order.totals.payable);
+            setItemData(count() - 1, details, Qt::ToolTipRole);
+            setItemData(count() - 1, details, Qt::AccessibleTextRole);
         }
         setCurrentIndex(-1);
-        showChoices(328);
+        ChoiceBox::showPopup();
     }
 
 protected:

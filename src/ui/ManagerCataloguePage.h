@@ -13,6 +13,7 @@ class QCheckBox;
 class QDateEdit;
 class QLabel;
 class QLineEdit;
+class QListWidget;
 class QPushButton;
 class QTableWidget;
 class QVBoxLayout;
@@ -36,7 +37,7 @@ private:
     vector<Category> categories_;
     vector<ProductStock> catalogue_;
     vector<Season> seasons_;
-    QTableWidget* productTable_ = nullptr;
+    QListWidget* productList_ = nullptr;
     QTableWidget* categoryTable_ = nullptr;
     QComboBox* unit_ = nullptr;
     QComboBox* category_ = nullptr;

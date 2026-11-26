@@ -13,17 +13,22 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QStackedWidget>
+#include <QStyledItemDelegate>
 #include <QTabBar>
 #include <QTableWidget>
 #include <QVBoxLayout>
 
 #include <limits>
+#include <tuple>
 
 using namespace std;
 
@@ -43,6 +48,73 @@ QString quantity(int64_t value, Unit unit)
     return fixed(value, 1000, unit == Unit::Count ? 0 : 3) +
         (unit == Unit::Count ? " items" : " kg");
 }
+
+constexpr int productRowInset = 16;
+constexpr int availableColumnWidth = 124;
+constexpr int priceColumnWidth = 152;
+
+enum ProductRowRole {
+    AcronymRole = Qt::UserRole,
+    AvailableRole,
+    PriceRole,
+    StockStatusRole
+};
+
+class ProductRows final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override
+    {
+        return {0, 112};
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
+    {
+        const QRect row = option.rect;
+        const bool selected = option.state.testFlag(QStyle::State_Selected);
+        const bool hovered = option.state.testFlag(QStyle::State_MouseOver);
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        if (selected || hovered) {
+            painter->setPen(selected ? QColor("#d9e1df") : QColor("#ecefef"));
+            painter->setBrush(selected ? QColor("#f1f5f4") : QColor("#fafbfb"));
+            painter->drawRoundedRect(row.adjusted(0, 4, -1, -5), 11, 11);
+        }
+        if (index.row() + 1 < index.model()->rowCount()) {
+            painter->setPen(QColor("#e7e9e9"));
+            painter->drawLine(row.left() + 1, row.bottom(), row.right() - 1, row.bottom());
+        }
+
+        const int left = row.left() + productRowInset;
+        const int price = row.right() + 1 - productRowInset - priceColumnWidth;
+        const int available = price - availableColumnWidth;
+        const int identityWidth = available - left - 12;
+        QFont font = option.font;
+        font.setPixelSize(15);
+        font.setWeight(QFont::Medium);
+        painter->setFont(font);
+        painter->setPen(QColor("#242424"));
+        const auto title = painter->fontMetrics().elidedText(index.data().toString(), Qt::ElideRight, identityWidth);
+        painter->drawText(QRect(left, row.top() + 20, identityWidth, 22),
+                          Qt::AlignLeft | Qt::AlignVCenter, title);
+        font.setWeight(QFont::Normal);
+        painter->setFont(font);
+        for (const auto& [role, x, width] : {std::tuple{AvailableRole, available, availableColumnWidth},
+                                             std::tuple{PriceRole, price, priceColumnWidth}}) {
+            const auto value = painter->fontMetrics().elidedText(index.data(role).toString(), Qt::ElideRight, width);
+            painter->drawText(QRect(x, row.top() + 20, width, 22), Qt::AlignRight | Qt::AlignVCenter, value);
+        }
+        font.setPixelSize(12);
+        painter->setFont(font);
+        painter->setPen(QColor("#686868"));
+        painter->drawText(QRect(left, row.top() + 46, identityWidth, 18), Qt::AlignVCenter,
+                          index.data(AcronymRole).toString());
+        painter->drawText(QRect(left, row.top() + 71, identityWidth, 18), Qt::AlignVCenter,
+                          index.data(StockStatusRole).toString());
+        painter->restore();
+    }
+};
 
 Result<int64_t> decimalInput(const QString& input, int decimals)
 {
@@ -230,12 +302,38 @@ ManagerCataloguePage::ManagerCataloguePage(ProductService& products, DiscountSer
     productHeader->addWidget(addProduct, 0, Qt::AlignTop);
     productListLayout->addLayout(productHeader);
     productListLayout->addSpacing(7);
-    productTable_ = table({"Product", "Barcode", "On hand", "Reserved", "Available"});
-    productTable_->setAccessibleName("Products and stock");
-    productTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int column = 1; column < productTable_->columnCount(); ++column)
-        productTable_->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
-    productListLayout->addWidget(productTable_, 1);
+    productListLayout->addWidget(divider());
+    auto* productHeadings = new QHBoxLayout;
+    productHeadings->setContentsMargins(productRowInset, 0, productRowInset, 0);
+    productHeadings->setSpacing(0);
+    productHeadings->addWidget(caption("Product", "catalogueHint"), 1);
+    auto* availableHeading = caption("Available", "catalogueHint");
+    availableHeading->setFixedWidth(availableColumnWidth);
+    availableHeading->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    productHeadings->addWidget(availableHeading);
+    auto* priceHeading = caption("Unit price", "catalogueHint");
+    priceHeading->setFixedWidth(priceColumnWidth);
+    priceHeading->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    productHeadings->addWidget(priceHeading);
+    productListLayout->addLayout(productHeadings);
+    productList_ = new QListWidget;
+    productList_->setAccessibleName("Products and stock");
+    productList_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    productList_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    productList_->setUniformItemSizes(true);
+    productList_->setMouseTracking(true);
+    productList_->setItemDelegate(new ProductRows(productList_));
+    productList_->setStyleSheet(
+        "QListWidget {background:white; border:0; outline:0;}"
+        "QScrollBar:vertical {background:transparent; width:8px; margin-left:2px;}"
+        "QScrollBar::handle:vertical {background:#d2d8d7; border-radius:3px; min-height:25px;}"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {height:0;}");
+    connect(productList_->verticalScrollBar(), &QScrollBar::rangeChanged, this,
+            [productHeadings, scrollbar = productList_->verticalScrollBar()](int min, int max) {
+        const int width = max > min ? scrollbar->sizeHint().width() : 0;
+        productHeadings->setContentsMargins(productRowInset, 0, productRowInset + width, 0);
+    });
+    productListLayout->addWidget(productList_, 1);
     productColumns->addWidget(productList, 650);
 
     QVBoxLayout* detailsLayout;
@@ -345,8 +443,7 @@ ManagerCataloguePage::ManagerCataloguePage(ProductService& products, DiscountSer
     pages->addWidget(categoriesTab);
     pages->addWidget(createDiscountsTab());
 
-    connect(productTable_, &QTableWidget::itemSelectionChanged, this, [this] {
-        const int row = productTable_->currentRow();
+    connect(productList_, &QListWidget::currentRowChanged, this, [this](int row) {
         if (row >= 0 && static_cast<size_t>(row) < catalogue_.size()) {
             showProduct(&catalogue_[static_cast<size_t>(row)]);
             feedback_->hide();
@@ -360,7 +457,7 @@ ManagerCataloguePage::ManagerCataloguePage(ProductService& products, DiscountSer
         }
     });
     connect(addProduct, &QPushButton::clicked, this, [this] {
-        productTable_->clearSelection();
+        productList_->setCurrentRow(-1);
         showProduct(nullptr);
         feedback_->hide();
         name_->setFocus();
@@ -410,7 +507,7 @@ void ManagerCataloguePage::refresh()
 {
     const string productId = selectedProduct_ ? selectedProduct_->id : string{};
     const string categoryId = selectedCategory_ ? selectedCategory_->id : string{};
-    const QSignalBlocker productBlocker(productTable_);
+    const QSignalBlocker productBlocker(productList_);
     const QSignalBlocker categoryBlocker(categoryTable_);
     const QSignalBlocker choicesBlocker(category_);
     const auto categories = products_.listCategories();
@@ -429,17 +526,29 @@ void ManagerCataloguePage::refresh()
             currentCategory = &category;
         }
     }
-    productTable_->setRowCount(0);
+    const int scrollPosition = productList_->verticalScrollBar()->value();
+    productList_->clear();
     const ProductStock* currentProduct = nullptr;
     for (const auto& item : catalogue_) {
         const auto& product = item.product;
-        addRow(*productTable_, {text(product.name), text(product.barcode), quantity(item.stock.onHand, product.unit),
-            quantity(item.stock.reserved, product.unit), quantity(item.stock.available, product.unit)});
+        auto* row = new QListWidgetItem(text(product.name), productList_);
+        const auto available = quantity(item.stock.available, product.unit);
+        const auto price = "PKR " + fixed(product.unitPrice);
+        row->setData(AcronymRole, text(product.acronym));
+        row->setData(AvailableRole, available);
+        row->setData(PriceRole, price);
+        if (!item.stock.available)
+            row->setData(StockStatusRole, item.stock.onHand ? "Fully reserved" : "Out of stock");
+        row->setData(Qt::AccessibleDescriptionRole, text(product.acronym) + " · Available " + available +
+                     " · " + price + " per " + (product.unit == Unit::Count ? "item" : "kg"));
+        row->setToolTip(row->text() + "\nAvailable " + available + " · " + price);
         if (product.id == productId) {
-            productTable_->selectRow(productTable_->rowCount() - 1);
+            productList_->setCurrentItem(row);
             currentProduct = &item;
         }
     }
+    productList_->verticalScrollBar()->setValue(scrollPosition);
+    if (currentProduct) productList_->scrollToItem(productList_->currentItem());
     showProduct(currentProduct);
     showCategory(currentCategory);
     if (!categories.success) showCategoryMessage(categories.message, false);
