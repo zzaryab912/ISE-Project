@@ -13,6 +13,7 @@
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QDateEdit>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDialog>
@@ -429,6 +430,37 @@ public:
     }
 };
 
+void drawChevron(QWidget& control, bool pointsUp = false)
+{
+    QPainter painter(&control);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor(control.isEnabled() ? ink : muted), 1.35,
+                       Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const QPointF center(control.width() - 20, control.height() / 2.0);
+    const int direction = pointsUp ? 1 : -1;
+    QPainterPath arrow;
+    arrow.moveTo(center + QPointF(-4, direction * 2));
+    arrow.lineTo(center + QPointF(0, -direction * 2));
+    arrow.lineTo(center + QPointF(4, direction * 2));
+    painter.drawPath(arrow);
+}
+
+class DateEditor final : public QDateEdit {
+public:
+    explicit DateEditor(const QDate& date, QWidget* parent) : QDateEdit(date, parent)
+    {
+        setCalendarPopup(true);
+        setDisplayFormat("dd MMM yyyy");
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override
+    {
+        QDateEdit::paintEvent(event);
+        drawChevron(*this);
+    }
+};
+
 class ChoiceBox final : public QComboBox {
 public:
     explicit ChoiceBox(QWidget* parent) : QComboBox(parent)
@@ -452,20 +484,30 @@ public:
             row->setData(Qt::UserRole, index == currentIndex());
         }
         rows_->setCurrentRow(currentIndex());
-        const int bodyHeight = count() * 40 + 14;
-        popup_->resize(width() + 2 * shadowInset, bodyHeight + 2 * shadowInset);
-        body_->setGeometry(shadowInset, shadowInset, width(), bodyHeight);
-        rows_->setGeometry(6, 6, width() - 12, bodyHeight - 12);
-
         QPoint position = mapToGlobal(QPoint(0, height() + 5));
-        if (const auto* screen = QGuiApplication::screenAt(position)) {
+        int bodyHeight = std::min(count(), 8) * 40 + 12;
+        const auto* screen = QGuiApplication::screenAt(mapToGlobal(rect().center()));
+        int bodyWidth = width();
+        if (screen) {
             const QRect available = screen->availableGeometry();
-            if (position.y() + bodyHeight > available.bottom())
-                position = mapToGlobal(QPoint(0, -bodyHeight - 5));
+            const QPoint control = mapToGlobal(QPoint());
+            const int below = available.bottom() + 1 - position.y();
+            const int above = control.y() - available.top() - 5;
+            const bool opensAbove = below < bodyHeight && above > below;
+            bodyHeight = std::max(52, std::min(bodyHeight, opensAbove ? above : below));
+            bodyWidth = std::min(bodyWidth, available.width());
+            if (opensAbove) position.setY(control.y() - bodyHeight - 5);
+            position.setX(std::clamp(position.x(), available.left(), available.right() - bodyWidth + 1));
+            position.setY(std::clamp(position.y(), available.top(),
+                std::max(available.top(), available.bottom() - bodyHeight + 1)));
         }
+        popup_->resize(bodyWidth + 2 * shadowInset, bodyHeight + 2 * shadowInset);
+        body_->setGeometry(shadowInset, shadowInset, bodyWidth, bodyHeight);
+        rows_->setGeometry(6, 6, bodyWidth - 12, bodyHeight - 12);
         popup_->move(position - QPoint(shadowInset, shadowInset));
         setMenuOpen(true);
         popup_->show();
+        rows_->scrollToItem(rows_->currentItem());
         rows_->setFocus(Qt::PopupFocusReason);
     }
 
@@ -479,17 +521,7 @@ protected:
     void paintEvent(QPaintEvent* event) override
     {
         QComboBox::paintEvent(event);
-        if (!isEnabled()) return;
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor(ink), 1.35, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        const QPointF center(width() - 20, height() / 2.0);
-        const int direction = menuOpen_ ? 1 : -1;
-        QPainterPath arrow;
-        arrow.moveTo(center + QPointF(-4, direction * 2));
-        arrow.lineTo(center + QPointF(0, -direction * 2));
-        arrow.lineTo(center + QPointF(4, direction * 2));
-        painter.drawPath(arrow);
+        drawChevron(*this, menuOpen_);
     }
 
     bool eventFilter(QObject* source, QEvent* event) override
@@ -550,9 +582,12 @@ private:
         rows_->setFrameShape(QFrame::NoFrame);
         rows_->setMouseTracking(true);
         rows_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        rows_->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        rows_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         rows_->setUniformItemSizes(true);
-        rows_->setStyleSheet("QListWidget {background:transparent; border:none; outline:none;}");
+        rows_->setStyleSheet("QListWidget {background:#f7f7f7; border:none; outline:none;}"
+            "QScrollBar:vertical { background:transparent; width:6px; }"
+            "QScrollBar::handle:vertical { background:#c8cecd; border-radius:3px; min-height:20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }");
         rows_->setItemDelegate(new ChoiceRows(rows_));
         rows_->installEventFilter(this);
         connect(rows_, &QListWidget::itemClicked, this, [this] { selectRow(); });
@@ -1300,7 +1335,7 @@ public:
             }
         }
         if (orders.empty()) {
-            label(rows, {32, 24, 540, 21}, showingArchives_ ? "No archived orders" : "No saved orders",
+            label(rows, {8, 20, 540, 21}, showingArchives_ ? "No archived orders" : "No saved orders",
                   18, detailInk, QFont::DemiBold);
             y = 100;
         }
@@ -1903,6 +1938,27 @@ public:
 
 } // namespace
 
+QComboBox* PosUi::choice(const QString& title, QWidget* parent)
+{
+    auto* widget = selector(parent, {}, title);
+    widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    widget->setFixedHeight(40);
+    return widget;
+}
+
+QDateEdit* PosUi::dateEditor(const QDate& date, QWidget* parent)
+{
+    return new DateEditor(date, parent);
+}
+
+QPushButton* PosUi::primaryButton(const QString& title, QWidget* parent)
+{
+    auto* widget = action(parent, {0, 0, 140, 42}, title, Action::Primary);
+    widget->setMinimumWidth(140);
+    widget->setFixedHeight(42);
+    return widget;
+}
+
 PosWindow::PosWindow(ProductService& products, DiscountService& discounts, CartService& cart,
                      PosScanner& scanner, CheckoutService& checkout, HistoryService& history,
                      const ReportService& reports, ManagerPinService& access, QWidget* parent)
@@ -1939,20 +1995,20 @@ PosWindow::PosWindow(ProductService& products, DiscountService& discounts, CartS
     settingsPage_ = new QWidget;
     label(settingsPage_, {0, -1, 616, 43}, "Settings", 36, ink, QFont::Medium);
     label(settingsPage_, {0, 45, 800, 16}, "Manage access to this terminal.", 14, muted);
-    auto* settings = panel(settingsPage_, {0, 81, 816, 596});
+    auto* settings = panel(settingsPage_, {0, 81, 816, 441});
     label(settings, {28, 28, 760, 24}, "Change PIN", 20, ink, QFont::DemiBold);
     label(settings, {28, 61, 760, 16}, "Use four digits. The new PIN also applies to paid-bill approvals.", 14, muted);
-    label(settings, {28, 146, 402, 16}, "Current PIN", 14, ink);
-    auto* currentPin = pinInput(settings, {28, 169, 402, 40}, "Current PIN");
-    label(settings, {28, 237, 402, 16}, "New PIN", 14, ink);
-    auto* newPin = pinInput(settings, {28, 260, 402, 40}, "New PIN");
-    label(settings, {28, 328, 402, 16}, "Confirm new PIN", 14, ink);
-    auto* confirm = pinInput(settings, {28, 351, 402, 40}, "Confirm new PIN");
-    settingsFeedback_ = label(settings, {28, 401, 760, 39}, {}, 14, errorInk);
+    label(settings, {28, 95, 402, 16}, "Current PIN", 14, ink);
+    auto* currentPin = pinInput(settings, {28, 117, 402, 40}, "Current PIN");
+    label(settings, {28, 176, 402, 16}, "New PIN", 14, ink);
+    auto* newPin = pinInput(settings, {28, 198, 402, 40}, "New PIN");
+    label(settings, {28, 257, 402, 16}, "Confirm new PIN", 14, ink);
+    auto* confirm = pinInput(settings, {28, 279, 402, 40}, "Confirm new PIN");
+    settingsFeedback_ = label(settings, {28, 329, 760, 26}, {}, 14, errorInk);
     settingsFeedback_->setWordWrap(true);
-    rule(settings, 28, 445, 760);
-    auto* back = action(settings, {28, 481, 120, 42}, "Back", Action::Secondary);
-    changePin_ = action(settings, {631, 481, 156, 42}, "Save PIN", Action::Primary);
+    rule(settings, 28, 364, 760);
+    auto* back = action(settings, {28, 382, 120, 42}, "Back", Action::Secondary);
+    changePin_ = action(settings, {631, 382, 156, 42}, "Save PIN", Action::Primary);
     connect(back, &QPushButton::clicked, this, [this] { showPage("Products & Discounts"); });
     connect(changePin_, &QPushButton::clicked, this, [this, currentPin, newPin, confirm] {
         onChangePin(currentPin->text().toStdString(), newPin->text().toStdString(), confirm->text().toStdString());

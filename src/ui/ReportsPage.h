@@ -30,6 +30,7 @@ private:
     QLabel* summary_ = nullptr;
     QLabel* feedback_ = nullptr;
     QWidget* saleTotals_ = nullptr;
+    QWidget* outputSpacer_ = nullptr;
     QTableWidget* table_ = nullptr;
     array<QCheckBox*, 3> modeChecks_{};
     array<QLabel*, 4> totalValues_{};

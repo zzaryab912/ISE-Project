@@ -20,7 +20,16 @@ class ReportsPage;
 class QImage;
 class QLabel;
 class QPushButton;
+class QComboBox;
+class QDate;
+class QDateEdit;
 class QStackedWidget;
+
+namespace PosUi {
+QComboBox* choice(const QString& title, QWidget* parent = nullptr);
+QDateEdit* dateEditor(const QDate& date, QWidget* parent = nullptr);
+QPushButton* primaryButton(const QString& title, QWidget* parent = nullptr);
+}
 
 class PosWindow : public QMainWindow {
 public:

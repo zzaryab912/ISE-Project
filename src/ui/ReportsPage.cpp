@@ -1,9 +1,9 @@
 #include "ReportsPage.h"
+#include "PosWindow.h"
 
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateEdit>
-#include <QFormLayout>
 #include <QFrame>
 #include <QHeaderView>
 #include <QLabel>
@@ -53,6 +53,22 @@ QLabel* reportLabel(const QString& title, const QString& role = {})
     return label;
 }
 
+QWidget* reportField(const QString& title, QWidget* control)
+{
+    auto* block = new QWidget;
+    auto* layout = new QVBoxLayout(block);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    auto* label = reportLabel(title);
+    label->setBuddy(control);
+    control->setAccessibleName(title);
+    control->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    control->setFixedHeight(40);
+    layout->addWidget(label);
+    layout->addWidget(control);
+    return block;
+}
+
 QFrame* reportCard()
 {
     auto* card = new QFrame;
@@ -84,14 +100,16 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
         QLabel#reportError { color: #a22922; }
         QFrame#reportCard { background: white; border: 1px solid #e3e3e3; border-radius: 21px; }
         QFrame#reportTile { background: #f6f6f6; border: 1px solid #ebebeb; border-radius: 10px; }
-        QComboBox, QDateEdit { min-height: 36px; padding: 0 10px; background: white;
-            border: 1px solid #d4d4d4; border-radius: 8px; color: #252525; }
-        QComboBox:focus, QDateEdit:focus { border: 1px solid #252525; }
-        QCheckBox { color: #272727; spacing: 6px; }
-        QPushButton#generateReport { background: #252525; color: white; min-height: 42px;
-            padding: 0 22px; border-radius: 9px; font-weight: 600; }
-        QPushButton#generateReport:hover { background: #424242; }
-        QPushButton#generateReport:focus { border: 2px solid #7691bf; }
+        QDateEdit { padding:0 12px; background:#fafafa;
+            border:1px solid #e7e7e7; border-radius:8px; color:#252525; }
+        QDateEdit:focus { border-color:#858585; }
+        QDateEdit::drop-down { border:none; width:30px; background:transparent; }
+        QDateEdit::down-arrow { image:none; width:0; height:0; }
+        QCheckBox { color:#272727; spacing:8px; }
+        QCheckBox::indicator { width:16px; height:16px; border-radius:4px;
+            background:#ffffff; border:1px solid #a0abaa; }
+        QCheckBox::indicator:checked { background:#4e6766; border:3px solid #e5ebea; }
+        QCheckBox::indicator:hover { border-color:#466765; }
         QTableWidget { border: none; background: white; alternate-background-color: #fafafa; }
         QHeaderView::section { background: #f5f5f5; border: none; border-bottom: 1px solid #e4e4e4;
             padding: 10px 8px; color: #4d4d4d; text-align: left; }
@@ -104,82 +122,86 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     heading->setFixedHeight(43);
     page->addWidget(heading);
     page->addSpacing(3);
-    page->addWidget(reportLabel("Choose a report and its options before generating it.", "reportSubtle"));
+    page->addWidget(reportLabel("Review sales, payments, and inventory.", "reportSubtle"));
     page->addSpacing(19);
 
     auto* options = reportCard();
-    options->setMinimumHeight(247);
     auto* optionLayout = new QVBoxLayout(options);
-    optionLayout->setContentsMargins(24, 19, 24, 19);
+    optionLayout->setContentsMargins(24, 20, 24, 20);
+    optionLayout->setSpacing(13);
     optionLayout->addWidget(reportLabel("Report options", "reportTitle"));
     auto* filterRow = new QHBoxLayout;
     filterRow->setSpacing(20);
-    auto* typeForm = new QFormLayout;
-    typeForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
-    kind_ = new QComboBox;
+    kind_ = PosUi::choice("Report type");
+    kind_->setMinimumWidth(235);
     for (size_t i = 0; i < reportNames.size(); ++i) kind_->addItem(reportNames[i], static_cast<int>(i));
     kind_->setCurrentIndex(kind_->findData(static_cast<int>(ReportKind::AllSales)));
-    typeForm->addRow("Report type", kind_);
-    filterRow->addLayout(typeForm, 2);
+    filterRow->addWidget(reportField("Report type", kind_), 3, Qt::AlignTop);
 
-    auto* periodForm = new QFormLayout;
-    periodForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
-    period_ = new QComboBox;
-    periodForm->addRow("Period", period_);
-    filterRow->addLayout(periodForm, 1);
-
-    dates_ = new QWidget;
-    auto* dateLayout = new QFormLayout(dates_);
-    dateLayout->setContentsMargins(0, 0, 0, 0);
-    dateLayout->setRowWrapPolicy(QFormLayout::WrapAllRows);
-    from_ = new QDateEdit(QDate::currentDate());
-    to_ = new QDateEdit(QDate::currentDate());
-    for (auto* field : {from_, to_}) {
-        field->setCalendarPopup(true);
-        field->setDisplayFormat("dd MMM yyyy");
-    }
-    dateLayout->addRow("From", from_);
-    dateLayout->addRow("To", to_);
-    filterRow->addWidget(dates_, 1);
+    period_ = PosUi::choice("Period");
+    period_->setMinimumWidth(160);
+    filterRow->addWidget(reportField("Period", period_), 2, Qt::AlignTop);
 
     methods_ = new QWidget;
     auto* modeLayout = new QVBoxLayout(methods_);
     modeLayout->setContentsMargins(0, 0, 0, 0);
+    modeLayout->setSpacing(6);
     modeLayout->addWidget(reportLabel("Payment methods"));
-    auto* checks = new QHBoxLayout;
+    auto* paymentRow = new QWidget;
+    paymentRow->setFixedHeight(40);
+    auto* checks = new QHBoxLayout(paymentRow);
+    checks->setContentsMargins(0, 0, 0, 0);
+    checks->setSpacing(18);
     for (size_t i = 0; i < modeChecks_.size(); ++i) {
         modeChecks_[i] = new QCheckBox(paymentNames[i]);
         modeChecks_[i]->setChecked(true);
         checks->addWidget(modeChecks_[i]);
     }
-    modeLayout->addLayout(checks);
-    modeLayout->addStretch();
-    filterRow->addWidget(methods_, 2);
+    checks->addStretch();
+    modeLayout->addWidget(paymentRow);
+    filterRow->addWidget(methods_, 3, Qt::AlignTop);
 
-    units_ = new QWidget;
-    auto* unitForm = new QFormLayout(units_);
-    unitForm->setContentsMargins(0, 0, 0, 0);
-    unitForm->setRowWrapPolicy(QFormLayout::WrapAllRows);
-    unit_ = new QComboBox;
+    unit_ = PosUi::choice("Measurement unit");
     unit_->addItem("Count and Weight", -1);
     unit_->addItem("Count", static_cast<int>(Unit::Count));
     unit_->addItem("Weight", static_cast<int>(Unit::Weight));
-    unitForm->addRow("Measurement unit", unit_);
-    filterRow->addWidget(units_, 1);
+    units_ = reportField("Measurement unit", unit_);
+    filterRow->addWidget(units_, 3, Qt::AlignTop);
+    filterRow->addStretch(2);
     optionLayout->addLayout(filterRow);
 
-    auto* run = new QPushButton("Generate Report");
+    dates_ = new QWidget;
+    auto* dateLayout = new QHBoxLayout(dates_);
+    dateLayout->setContentsMargins(0, 0, 0, 0);
+    dateLayout->setSpacing(20);
+    from_ = PosUi::dateEditor(QDate::currentDate());
+    to_ = PosUi::dateEditor(QDate::currentDate());
+    for (auto* edit : {from_, to_}) {
+        edit->setMinimumWidth(165);
+    }
+    dateLayout->addWidget(reportField("From", from_));
+    dateLayout->addWidget(reportField("To", to_));
+    dateLayout->addStretch(1);
+    optionLayout->addWidget(dates_);
+
+    auto* run = PosUi::primaryButton("Generate Report");
     run->setObjectName("generateReport");
+    run->setMinimumWidth(159);
     optionLayout->addWidget(run, 0, Qt::AlignRight);
-    page->addWidget(options);
+    page->addWidget(options, 0);
     page->addSpacing(24);
 
     auto* output = reportCard();
     auto* outputLayout = new QVBoxLayout(output);
     outputLayout->setContentsMargins(24, 21, 24, 21);
+    outputLayout->setSpacing(7);
     title_ = reportLabel("No report generated", "reportTitle");
     summary_ = reportLabel("Choose your options, then select Generate Report.", "reportSubtle");
     feedback_ = reportLabel({}, "reportError");
+    for (auto* label : {title_, summary_, feedback_})
+        label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    outputSpacer_ = new QWidget;
+    outputSpacer_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
     feedback_->hide();
     saleTotals_ = new QWidget;
     auto* totalsLayout = new QHBoxLayout(saleTotals_);
@@ -211,6 +233,7 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
     outputLayout->addWidget(feedback_);
     outputLayout->addWidget(saleTotals_);
     outputLayout->addWidget(table_, 1);
+    outputLayout->addWidget(outputSpacer_, 1);
     page->addWidget(output, 1);
 
     connect(kind_, &QComboBox::currentIndexChanged, this, [this] {
@@ -221,6 +244,7 @@ ReportsPage::ReportsPage(QWidget* parent) : QWidget(parent)
         feedback_->hide();
         saleTotals_->hide();
         table_->hide();
+        outputSpacer_->show();
     });
     connect(period_, &QComboBox::currentIndexChanged, this, [this] {
         dates_->setVisible(period_->currentData().toInt() == static_cast<int>(ReportPeriod::Custom));
@@ -338,6 +362,7 @@ void ReportsPage::showResult(const ReportResult& report)
     if (table_->rowCount() == 0) {
         summary_->setText(dateRange + "No results for these options.");
         table_->hide();
+        outputSpacer_->show();
         return;
     }
     QString totals;
@@ -360,6 +385,7 @@ void ReportsPage::showResult(const ReportResult& report)
         totals = methods.join(", ");
     }
     summary_->setText(totals.isEmpty() ? "Archived bills are excluded." : dateRange + totals);
+    outputSpacer_->hide();
     table_->show();
     table_->resizeRowsToContents();
 }
@@ -373,6 +399,7 @@ void ReportsPage::showError(const string& message)
     feedback_->show();
     saleTotals_->hide();
     table_->hide();
+    outputSpacer_->show();
 }
 
 void ReportsPage::setGenerateAction(function<void(const ReportRequest&)> action)
