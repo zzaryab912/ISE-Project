@@ -580,9 +580,10 @@ cv::Mat ImageSource::straighten(const cv::Mat& gray, const std::vector<cv::Point
     }
 
     const cv::Point2f u = dirU / width;
+    const cv::Point2f v = dirV / height;
     // The gradient contour can omit low-energy outer bars. Include more of
     // the actual image on both sides, including the required quiet zones.
-    const float maxExpand = 0.30f * width;
+    const float maxExpand = std::max(1.0f, std::floor(0.30f * width));
 
     const float leftExpand = std::min(
         maxInsideShift(tl, -u, maxExpand, gray.cols, gray.rows),
@@ -600,8 +601,26 @@ cv::Mat ImageSource::straighten(const cv::Mat& gray, const std::vector<cv::Point
     const cv::Point2f expBR = br + u * rightExpand;
 
     const float expandedWidth = width + leftExpand + rightExpand;
-    const int dstW = std::max(1, static_cast<int>(std::lround(expandedWidth)) + 1);
-    const int dstH = std::max(1, static_cast<int>(std::lround(height)) + 1);
+    const float srcSpanW = expandedWidth + 1.0f;
+    const float srcSpanH = height + 1.0f;
+
+    // Supersample narrow/small barcodes so subpixel resampling across rotated,
+    // scaled, or 1x crops keeps bar edges well within decoder tolerances.
+    constexpr float kMinRectifiedBarcodeWidth = 600.0f;
+    float renderScale = 1.0f;
+    if (width < kMinRectifiedBarcodeWidth) {
+        renderScale = std::clamp(std::ceil(kMinRectifiedBarcodeWidth / width), 1.0f, 4.0f);
+    }
+
+    const float maxScaleW = 8192.0f / std::max(1.0f, srcSpanW);
+    const float maxScaleH = 8192.0f / std::max(1.0f, srcSpanH);
+    const float maxScaleArea = std::sqrt(16'000'000.0f / std::max(1.0f, srcSpanW * srcSpanH));
+    renderScale = std::max(1.0f, std::min({renderScale, maxScaleW, maxScaleH, maxScaleArea}));
+
+    const float scaledW = srcSpanW * renderScale;
+    const float scaledH = srcSpanH * renderScale;
+    const int dstW = std::max(1, static_cast<int>(std::floor(scaledW)));
+    const int dstH = std::max(1, static_cast<int>(std::floor(scaledH)));
 
     if (dstW > 8192 || dstH > 8192 ||
         static_cast<std::size_t>(dstW) * static_cast<std::size_t>(dstH) > 16'000'000) {
@@ -609,19 +628,28 @@ cv::Mat ImageSource::straighten(const cv::Mat& gray, const std::vector<cv::Point
         return cv::Mat();
     }
 
-    const std::vector<cv::Point2f> srcPts = {expTL, expTR, expBR, expBL};
+    // Use pixel-center half-texel outer bounds so resampling preserves 1:1
+    // unit step along (u, v) and does not trim boundary quiet-zone pixels.
+    const cv::Point2f halfU = u * 0.5f;
+    const cv::Point2f halfV = v * 0.5f;
+    const std::vector<cv::Point2f> srcPts = {
+        expTL - halfU - halfV,
+        expTR + halfU - halfV,
+        expBR + halfU + halfV,
+        expBL - halfU + halfV
+    };
 
     const std::vector<cv::Point2f> dstPts = {
-        cv::Point2f(0.0f, 0.0f),
-        cv::Point2f(static_cast<float>(dstW - 1), 0.0f),
-        cv::Point2f(static_cast<float>(dstW - 1), static_cast<float>(dstH - 1)),
-        cv::Point2f(0.0f, static_cast<float>(dstH - 1))
+        cv::Point2f(-0.5f, -0.5f),
+        cv::Point2f(scaledW - 0.5f, -0.5f),
+        cv::Point2f(scaledW - 0.5f, scaledH - 0.5f),
+        cv::Point2f(-0.5f, scaledH - 0.5f)
     };
 
     const cv::Mat transform = cv::getPerspectiveTransform(srcPts, dstPts);
     cv::Mat warped;
 
     cv::warpPerspective(gray, warped, transform, cv::Size(dstW, dstH),
-                        cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0));
+                        cv::INTER_LINEAR, cv::BORDER_REPLICATE);
     return warped;
 }

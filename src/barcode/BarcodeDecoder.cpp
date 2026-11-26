@@ -41,8 +41,63 @@ DecodeResult BarcodeDecoder::decode(const cv::Mat& barcode) const
     }
 
     try {
-        cv::Mat binary;
+        auto tryDecodeBinary = [&](cv::Mat binary) -> DecodeResult {
+            string acceptedCode;
+            const int rowCount = min(binary.rows, 31);
 
+            // Scan rows spread from top to bottom, then repeat after flipping.
+            for (int direction = 0; direction < 2; ++direction) {
+                for (int index = 0; index < rowCount; ++index) {
+                    int row = 0;
+
+                    if (rowCount > 1) {
+                        row = index * (binary.rows - 1) / (rowCount - 1);
+                    }
+
+                    string rowCode;
+                    bool ambiguous = false;
+
+                    const bool found = decodeLine(
+                        binary, row, rowCode, ambiguous
+                    );
+
+                    if (ambiguous ||
+                        (found &&
+                         !acceptedCode.empty() &&
+                         acceptedCode != rowCode)) {
+                        return {
+                            false,
+                            "Conflicting barcode readings. Please try again.",
+                            ""
+                        };
+                    }
+
+                    if (found) {
+                        acceptedCode = rowCode;
+                    }
+                }
+
+                if (direction == 0) {
+                    cv::flip(binary, binary, 1);
+                }
+            }
+
+            if (!acceptedCode.empty()) {
+                return {
+                    true,
+                    "Barcode read successfully.",
+                    acceptedCode
+                };
+            }
+
+            return {
+                false,
+                "Could not read the barcode. Please try again.",
+                ""
+            };
+        };
+
+        cv::Mat binary;
         cv::threshold(
             barcode,
             binary,
@@ -51,59 +106,74 @@ DecodeResult BarcodeDecoder::decode(const cv::Mat& barcode) const
             cv::THRESH_BINARY | cv::THRESH_OTSU
         );
 
-        string acceptedCode;
-        const int rowCount = min(binary.rows, 31);
+        DecodeResult primary = tryDecodeBinary(std::move(binary));
+        if (primary.found ||
+            primary.message == "Conflicting barcode readings. Please try again.") {
+            return primary;
+        }
 
-        // Scan rows spread from top to bottom, then repeat after flipping.
-        for (int direction = 0; direction < 2; ++direction) {
-            for (int index = 0; index < rowCount; ++index) {
-                int row = 0;
-
-                if (rowCount > 1) {
-                    row = index * (binary.rows - 1) / (rowCount - 1);
-                }
-
-                string rowCode;
-                bool ambiguous = false;
-
-                const bool found = decodeLine(
-                    binary, row, rowCode, ambiguous
-                );
-
-                if (ambiguous ||
-                    (found &&
-                     !acceptedCode.empty() &&
-                     acceptedCode != rowCode)) {
-                    return {
-                        false,
-                        "Conflicting barcode readings. Please try again.",
-                        ""
-                    };
-                }
-
-                if (found) {
-                    acceptedCode = rowCode;
-                }
-            }
-
-            if (direction == 0) {
-                cv::flip(binary, binary, 1);
+        // Fallback for narrow direct crops or quiet-zone-skewed Otsu thresholds:
+        // upsample narrow crops horizontally and split symmetrically between the
+        // central barcode band's dark and light percentiles.
+        cv::Mat resampled = barcode;
+        if (barcode.cols < 600) {
+            const int scale = std::clamp(
+                (600 + barcode.cols - 1) / barcode.cols, 2, 4);
+            const size_t scaledPixels =
+                static_cast<size_t>(barcode.cols) * static_cast<size_t>(scale) *
+                static_cast<size_t>(barcode.rows);
+            if (barcode.cols * scale <= MAX_SIDE && scaledPixels <= MAX_PIXELS) {
+                cv::resize(barcode, resampled,
+                           cv::Size(barcode.cols * scale, barcode.rows),
+                           0.0, 0.0, cv::INTER_LINEAR);
             }
         }
 
-        if (!acceptedCode.empty()) {
-            return {
-                true,
-                "Barcode read successfully.",
-                acceptedCode
-            };
+        const int yStart = resampled.rows / 4;
+        const int yEnd = std::max(yStart + 1, (resampled.rows * 3) / 4);
+        size_t hist[256] = {};
+        size_t bandPixels = 0;
+        for (int r = yStart; r < yEnd; ++r) {
+            const unsigned char* rowPtr = resampled.ptr<unsigned char>(r);
+            for (int c = 0; c < resampled.cols; ++c) {
+                ++hist[rowPtr[c]];
+            }
+            bandPixels += static_cast<size_t>(resampled.cols);
         }
 
-        return {
-            false,
-            "Could not read the barcode. Please try again.",
-            ""
-        };
+        if (bandPixels > 0) {
+            const size_t lowTarget = std::max<size_t>(1, bandPixels / 50);
+            const size_t highTarget = std::max<size_t>(1, (bandPixels * 49) / 50);
+            int pLow = 0;
+            int pHigh = 255;
+            size_t cumulative = 0;
+            bool gotLow = false;
+            for (int v = 0; v < 256; ++v) {
+                cumulative += hist[v];
+                if (!gotLow && cumulative >= lowTarget) {
+                    pLow = v;
+                    gotLow = true;
+                }
+                if (cumulative >= highTarget) {
+                    pHigh = v;
+                    break;
+                }
+            }
+
+            if (pHigh - pLow >= 20) {
+                const double midThresh =
+                    0.5 * (static_cast<double>(pLow) + static_cast<double>(pHigh));
+                cv::Mat balancedBinary;
+                cv::threshold(resampled, balancedBinary, midThresh, 255, cv::THRESH_BINARY);
+                DecodeResult fallback = tryDecodeBinary(std::move(balancedBinary));
+                if (fallback.found ||
+                    fallback.message == "Conflicting barcode readings. Please try again.") {
+                    return fallback;
+                }
+            }
+        }
+
+        return primary;
     }
     catch (const exception&) {
         return {
