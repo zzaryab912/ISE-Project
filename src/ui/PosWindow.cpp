@@ -1734,12 +1734,16 @@ public:
     {
         setGeometry(0, 40, canvasWidth, canvasHeight - 40);
         auto* launch = panel(this, {310, 138, 1164, 698}, "#ffffff", "#e3e3e3");
-        auto* brand = new Artwork(launch, "eyeris-background.png", 17);
+        auto* brand = new QLabel(launch);
         brand->setGeometry(36, 29, 455, 639);
-        new SvgIcon(brand, {104, 289, 247, 70}, wordmarkSvg);
+        brand->setObjectName("launchBrandPanel");
+        brand->setAccessibleName("Eyeris");
+        brand->setScaledContents(true);
+        brand->setPixmap(QPixmap(assetPath("eyeris-brand-panel.png")));
 
+        constexpr int formWidth = 526;
         pick_ = new QWidget(launch);
-        pick_->setGeometry(570, 176, 526, 336);
+        pick_->setGeometry(570, 176, formWidth, 336);
         label(pick_, {0, 0, 526, 43}, "Choose a role", 36, ink, QFont::Medium);
         const auto card = [this, &window](Role role, const QString& name, const QString& detail, int y) {
             auto* hit = action(pick_, {0, y, 526, 94}, {}, Action::Secondary);
@@ -1753,11 +1757,11 @@ public:
         card(Role::Manager, "Manager", "Manage products, orders and reports.", 219);
 
         pinPanel_ = new QWidget(launch);
-        pinPanel_->setGeometry(570, 176, 526, 365);
+        pinPanel_->setGeometry(570, 176, formWidth, 365);
         pinHeading_ = label(pinPanel_, {0, 0, 526, 43}, "Manager PIN", 36, ink, QFont::Medium);
         pinHint_ = label(pinPanel_, {0, 55, 526, 31}, {}, 14, muted);
-        pin_ = pinInput(pinPanel_, {0, 111, 402, 40}, "Manager PIN");
-        confirm_ = pinInput(pinPanel_, {0, 166, 402, 40}, "Confirm Manager PIN");
+        pin_ = pinInput(pinPanel_, {0, 111, formWidth, 40}, "Manager PIN");
+        confirm_ = pinInput(pinPanel_, {0, 166, formWidth, 40}, "Confirm Manager PIN");
         auto* back = action(pinPanel_, {0, 258, 112, 42}, "Back", Action::Secondary);
         submit_ = action(pinPanel_, {355, 258, 170, 42}, "Continue", Action::Primary);
         connect(back, &QPushButton::clicked, this, &LaunchPage::showPicker);
