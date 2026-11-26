@@ -1,8 +1,8 @@
 #pragma once
 #include "PosTypes.h"
 #include "ReaderContracts.h"
-#include <string>
 #include <chrono>
+#include <string>
 
 class ImageSource;
 class BarcodeDecoder;
@@ -21,12 +21,22 @@ class PosScanner{
 
 
     ImageSource& source_;
-    const BarcodeDecoder& decoder_;     
+    const BarcodeDecoder& decoder_;
     std::string lastCode_;          //last barcode scanned
-    std::chrono::steady_clock::time_point noDecodeSince_{};
-    unsigned noDecodePolls_ = 0;
+    std::chrono::steady_clock::time_point absentSince_{};
+    unsigned absentPolls_ = 0;
     bool rearmed_ = false;
-    bool running_;                  //scanner running or not
+    bool running_ = false;          //scanner running or not
+
+    // Require uninterrupted absence across multiple polls and elapsed wall time before re-arming.
+    static constexpr unsigned kRearmAbsentPolls = 4;
+    static constexpr std::chrono::milliseconds kRearmAbsentDuration{800};
+
+    void resetAbsence();
+    void resetSession();
+    void evaluatePresentation(ImageStatus status,
+                              std::chrono::steady_clock::time_point now,
+                              ScanResult& result);
 
 public:
 

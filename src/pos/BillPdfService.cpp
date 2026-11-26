@@ -1,5 +1,6 @@
 #include "BillPdfService.h"
 
+#include <QAbstractTextDocumentLayout>
 #include <QFile>
 #include <QGuiApplication>
 #include <QPageLayout>
@@ -234,6 +235,7 @@ Status renderPdf(QIODevice& file, const BillContents& bill)
 
     const QSize pageSize = writer.pageLayout().paintRectPixels(writer.resolution()).size();
     QTextDocument document;
+    document.documentLayout()->setPaintDevice(&writer);
     QFont font = document.defaultFont();
     font.setPointSize(10);
     document.setDefaultFont(font);

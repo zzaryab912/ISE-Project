@@ -7,6 +7,7 @@
 #include <cctype>
 #include <filesystem>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,6 +15,27 @@
 using namespace std;
 
 namespace {
+
+    bool hasLineBreak(const string& text) {
+        return text.find_first_of("\r\n") != string::npos;
+    }
+
+    bool isBarcodeReferenced(const StoreData& data, const string& barcode) {
+        if (find(data.issuedBarcodes.begin(), data.issuedBarcodes.end(), barcode) != data.issuedBarcodes.end()) {
+            return true;
+        }
+        if (any_of(data.products.begin(), data.products.end(),
+                   [&](const Product& p) { return p.barcode == barcode; })) {
+            return true;
+        }
+        for (const auto& sale : data.sales) {
+            if (any_of(sale.lines.begin(), sale.lines.end(),
+                       [&](const SaleLine& line) { return line.barcode == barcode; })) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     string trim(const string& text) {
         size_t start = 0;
@@ -157,6 +179,9 @@ Result<Category> ProductService::saveCategory(const optional<Category>& original
     if (cleanName.empty() || cleanAcronym.empty()) {
         return { false, "Category name and acronym must not be empty.", {} };
     }
+    if (hasLineBreak(cleanName) || hasLineBreak(cleanAcronym)) {
+        return { false, "Category name and acronym must each be on one line.", {} };
+    }
 
     Result<StoreData> storeResult = store_.read();
     if (!storeResult.success) {
@@ -170,10 +195,10 @@ Result<Category> ProductService::saveCategory(const optional<Category>& original
     if (!original.has_value()) {
         // Creating a new category
         for (const auto& existing : data.categories) {
-            if (toLower(existing.name) == lowerName) {
+            if (toLower(trim(existing.name)) == lowerName) {
                 return { false, "A category with this name already exists.", {} };
             }
-            if (toLower(existing.acronym) == lowerAcronym) {
+            if (toLower(trim(existing.acronym)) == lowerAcronym) {
                 return { false, "A category with this acronym already exists.", {} };
             }
         }
@@ -211,10 +236,10 @@ Result<Category> ProductService::saveCategory(const optional<Category>& original
         if (existing.id == original->id) {
             continue;
         }
-        if (toLower(existing.name) == lowerName) {
+        if (toLower(trim(existing.name)) == lowerName) {
             return { false, "Another category with this name already exists.", {} };
         }
-        if (toLower(existing.acronym) == lowerAcronym) {
+        if (toLower(trim(existing.acronym)) == lowerAcronym) {
             return { false, "Another category with this acronym already exists.", {} };
         }
     }
@@ -328,6 +353,9 @@ Result<StockPosition> ProductService::stockPosition(
         }
         for (const auto& line : sale.lines) {
             if (line.productId == productId && line.quantity > 0) {
+                if (line.quantity > numeric_limits<int64_t>::max() - reserved) {
+                    return { false, "Reserved stock quantity exceeds the supported range.", {} };
+                }
                 reserved += line.quantity;
             }
         }
@@ -336,7 +364,7 @@ Result<StockPosition> ProductService::stockPosition(
     StockPosition pos;
     pos.onHand = prodIt->onHand;
     pos.reserved = reserved;
-    pos.available = max<int64_t>(0, prodIt->onHand - reserved);
+    pos.available = (prodIt->onHand > reserved) ? (prodIt->onHand - reserved) : 0;
     return { true, {}, pos };
 }
 
@@ -425,17 +453,27 @@ Result<vector<StockShortage>> ProductService::shortages(
     vector<StockShortage> shortageList;
     unordered_map<string, int64_t> aggregatedQty;
     unordered_map<string, const SaleLine*> firstLine;
+    unordered_set<string> mismatchedUnitIds;
     vector<string> order;
 
     for (const auto& line : requested) {
-        if (line.quantity <= 0) {
+        if (line.quantity < 0) {
+            return { false, "Requested stock quantity cannot be negative.", {} };
+        }
+        if (line.quantity == 0) {
             continue;
         }
         if (aggregatedQty.find(line.productId) == aggregatedQty.end()) {
             order.push_back(line.productId);
             firstLine[line.productId] = &line;
         }
+        if (line.quantity > numeric_limits<int64_t>::max() - aggregatedQty[line.productId]) {
+            return { false, "Requested stock quantity exceeds the supported range.", {} };
+        }
         aggregatedQty[line.productId] += line.quantity;
+        if (line.unit != firstLine[line.productId]->unit) {
+            mismatchedUnitIds.insert(line.productId);
+        }
     }
 
     for (const auto& prodId : order) {
@@ -445,7 +483,8 @@ Result<vector<StockShortage>> ProductService::shortages(
         auto prodIt = find_if(data.products.begin(), data.products.end(),
             [&](const Product& p) { return p.id == prodId; });
 
-        if (prodIt == data.products.end() || prodIt->unit != line.unit) {
+        if (prodIt == data.products.end() || prodIt->unit != line.unit ||
+            mismatchedUnitIds.find(prodId) != mismatchedUnitIds.end()) {
             string displayName = !line.name.empty() ? line.name : line.acronym;
             shortageList.push_back({ prodId, displayName, line.unit, totalRequired, 0 });
             continue;
@@ -474,6 +513,9 @@ Status ProductService::deductStock(
     for (const auto& line : lines) {
         if (line.quantity < 0) {
             return { false, "Quantity cannot be negative for product ID: " + line.productId };
+        }
+        if (line.unit != Unit::Count && line.unit != Unit::Weight) {
+            return { false, "Invalid measurement unit for product ID: " + line.productId };
         }
         if (line.unit == Unit::Count && (line.quantity % 1000 != 0)) {
             return { false, "Count product quantity must be a whole number for product ID: " + line.productId };
@@ -533,6 +575,9 @@ Status ProductService::applyPaidStockDifference(
         if (beforeIt == before.end()) {
             return { false, "Edited product does not exist on the original bill: " + change.productId };
         }
+        if (beforeIt->quantity < 0 || (beforeIt->unit != Unit::Count && beforeIt->unit != Unit::Weight)) {
+            return { false, "Original bill line has an invalid unit or quantity for product ID: " + change.productId };
+        }
 
         if (beforeIt->unit == Unit::Count &&
             (change.quantity % 1000 != 0 || change.restockQuantity % 1000 != 0)) {
@@ -571,6 +616,10 @@ Status ProductService::applyPaidStockDifference(
                 if (prodIt == data.products.end() || prodIt->unit != beforeIt->unit) {
                     return { false, "Cannot restock: product is missing or its unit has changed." };
                 }
+                if (prodIt->onHand < 0 ||
+                    prodIt->onHand > numeric_limits<int64_t>::max() - change.restockQuantity) {
+                    return { false, "Restocking would exceed the supported stock quantity for: " + prodIt->name };
+                }
                 pending.push_back({ prodIt->id, change.restockQuantity });
             }
         }
@@ -605,8 +654,14 @@ Result<Product> ProductService::create(const Product& input) {
     if (cleanName.empty() || cleanAcronym.empty()) {
         return { false, "Product name and acronym must not be empty.", {} };
     }
+    if (hasLineBreak(cleanName) || hasLineBreak(cleanAcronym)) {
+        return { false, "Product name and acronym must each be on one line.", {} };
+    }
     if (!isValidCategoryId(input.categoryId)) {
         return { false, "A valid category ID (10-99) is required.", {} };
+    }
+    if (input.unit != Unit::Count && input.unit != Unit::Weight) {
+        return { false, "Invalid product measurement unit.", {} };
     }
     if (input.unitPrice < 0 || input.discountPerUnit < 0 || input.discountPerUnit > input.unitPrice) {
         return { false, "Invalid unit price or discount per unit.", {} };
@@ -643,6 +698,13 @@ Result<Product> ProductService::create(const Product& input) {
         return { false, barcodeResult.message, {} };
     }
 
+    const auto stalePath = images_.imagePath(barcodeResult.value);
+    error_code staleError;
+    if (filesystem::exists(stalePath, staleError) && !staleError &&
+        !isBarcodeReferenced(data, barcodeResult.value)) {
+        filesystem::remove(stalePath, staleError);
+    }
+
     Result<string> imageResult = images_.save(barcodeResult.value);
     if (!imageResult.success) {
         return { false, "Failed to generate barcode PNG: " + imageResult.message, {} };
@@ -660,8 +722,11 @@ Result<Product> ProductService::create(const Product& input) {
 
     Status saveStatus = store_.save(data);
     if (!saveStatus.success) {
-        error_code ec;
-        filesystem::remove(images_.imagePath(created.barcode), ec);
+        const auto current = store_.read();
+        if (current.success && !isBarcodeReferenced(current.value, created.barcode)) {
+            error_code ec;
+            filesystem::remove(images_.imagePath(created.barcode), ec);
+        }
         return { false, saveStatus.message.empty() ? "Failed to save product to storage." : saveStatus.message, {} };
     }
 
@@ -680,8 +745,14 @@ Result<Product> ProductService::update(const Product& original, const Product& r
     if (cleanName.empty() || cleanAcronym.empty()) {
         return { false, "Product name and acronym must not be empty.", {} };
     }
+    if (hasLineBreak(cleanName) || hasLineBreak(cleanAcronym)) {
+        return { false, "Product name and acronym must each be on one line.", {} };
+    }
     if (!isValidCategoryId(replacement.categoryId)) {
         return { false, "A valid category ID (10-99) is required.", {} };
+    }
+    if (replacement.unit != Unit::Count && replacement.unit != Unit::Weight) {
+        return { false, "Invalid product measurement unit.", {} };
     }
     if (replacement.unitPrice < 0 || replacement.discountPerUnit < 0 ||
         replacement.discountPerUnit > replacement.unitPrice) {
@@ -747,7 +818,7 @@ Result<Product> ProductService::update(const Product& original, const Product& r
                 continue;
             }
             for (const auto& line : sale.lines) {
-                if (line.productId == prodIt->id && line.quantity > 0) {
+                if (line.productId == prodIt->id) {
                     hasActiveHold = true;
                     break;
                 }
@@ -771,6 +842,12 @@ Result<Product> ProductService::update(const Product& original, const Product& r
         Result<string> barcodeResult = allocateBarcode(data, replacement.categoryId);
         if (!barcodeResult.success) {
             return { false, barcodeResult.message, {} };
+        }
+        const auto stalePath = images_.imagePath(barcodeResult.value);
+        error_code staleError;
+        if (filesystem::exists(stalePath, staleError) && !staleError &&
+            !isBarcodeReferenced(data, barcodeResult.value)) {
+            filesystem::remove(stalePath, staleError);
         }
         Result<string> imageResult = images_.save(barcodeResult.value);
         if (!imageResult.success) {
@@ -800,8 +877,11 @@ Result<Product> ProductService::update(const Product& original, const Product& r
     Status saveStatus = store_.save(data);
     if (!saveStatus.success) {
         if (categoryChanged) {
-            error_code ec;
-            filesystem::remove(images_.imagePath(newBarcode), ec);
+            const auto current = store_.read();
+            if (current.success && !isBarcodeReferenced(current.value, newBarcode)) {
+                error_code ec;
+                filesystem::remove(images_.imagePath(newBarcode), ec);
+            }
         }
         return { false, saveStatus.message.empty() ? "Failed to save updated product." : saveStatus.message, {} };
     }
@@ -831,7 +911,7 @@ Status ProductService::remove(const string& productId) {
             continue;
         }
         for (const auto& line : sale.lines) {
-            if (line.productId == productId && line.quantity > 0) {
+            if (line.productId == productId) {
                 return { false, "Cannot delete product: it is referenced by an active OnHold order." };
             }
         }

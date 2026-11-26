@@ -5,6 +5,8 @@
 
 #include "PosTypes.h"
 
+using namespace std;
+
 class IPosStore {
 public:
     virtual Result<StoreData> read() const = 0;

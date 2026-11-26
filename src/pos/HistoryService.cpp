@@ -159,16 +159,6 @@ Status HistoryService::unarchive(const string& orderId)
         if (!finished.success) {
             return finished;
         }
-    } else {
-        // An active hold uses the live barcode for its reservation, including after a relabel.
-        for (auto& line : sale->lines) {
-            const auto product = find_if(data.value.products.begin(), data.value.products.end(),
-                [&line](const Product& item) { return item.id == line.productId; });
-            if (product == data.value.products.end()) {
-                return {false, "Held product no longer exists: " + line.name + "."};
-            }
-            line.barcode = product->barcode;
-        }
     }
 
     sale->archived = false;

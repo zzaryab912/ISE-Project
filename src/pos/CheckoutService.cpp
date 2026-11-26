@@ -359,6 +359,9 @@ Result<SaleRecord> CheckoutService::generateBill(const vector<CartItem>& items, 
 
 Result<HeldCheckout> CheckoutService::resumeHeldOrder(const string& orderId) const
 {
+    if (orderId.empty()) {
+        return {false, "Order ID is required.", {}};
+    }
     auto data = store_.read();
     if (!data.success) {
         return {false, "Could not read checkout data. " + data.message, {}};
@@ -386,6 +389,9 @@ Result<SaleRecord> CheckoutService::saveHeldOrder(const string& orderId, const v
                                                   OrderStatus status, const Timestamp& now,
                                                   const optional<int64_t>& expectedPayable)
 {
+    if (orderId.empty()) {
+        return {false, "Order ID is required.", {}};
+    }
     return save(items, customer, payment, status, now, expectedPayable, &orderId);
 }
 
@@ -447,6 +453,15 @@ Result<SaleRecord> CheckoutService::save(const vector<CartItem>& items, const Cu
     sale.status = status;
     sale.payment = std::move(checkedPayment.value);
     sale.lines = std::move(priced.value.lines);
+    if (heldOrderId) {
+        for (auto& line : sale.lines) {
+            const auto savedLine = find_if(original->lines.begin(), original->lines.end(),
+                [&line](const SaleLine& saved) { return saved.productId == line.productId; });
+            if (savedLine != original->lines.end()) {
+                line.barcode = savedLine->barcode;
+            }
+        }
+    }
     sale.terms = priced.value.terms;
     sale.totals = priced.value.totals;
     if (status == OrderStatus::Paid) {
@@ -472,6 +487,9 @@ Result<PaidEditDraft> CheckoutService::previewPaidEdit(const string& orderId,
                                                        const vector<QuantityChange>& changes,
                                                        const Timestamp& now) const
 {
+    if (orderId.empty()) {
+        return {false, "Order ID is required.", {}};
+    }
     auto data = store_.read();
     if (!data.success) {
         return {false, "Could not read checkout data. " + data.message, {}};

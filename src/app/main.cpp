@@ -25,7 +25,6 @@
 #include <QStringList>
 #include <QRegularExpressionValidator>
 #include <QStackedWidget>
-#include <QStandardPaths>
 #include <QString>
 #include <QSvgRenderer>
 #include <QTimer>
@@ -36,7 +35,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <string>
+#include <system_error>
 
 #include "BarcodeDecoder.h"
 #include "BarcodeImageIO.h"
@@ -45,15 +46,19 @@
 #include "barcodeGenerator.h"
 #include "camera-harness.h"
 #include "BarcodeAssetService.h"
+#include "BillPdfService.h"
 #include "CartService.h"
 #include "CheckoutService.h"
+#include "DiscountService.h"
 #include "HistoryService.h"
 #include "IdGenerator.h"
+#include "ManagerPinService.h"
 #include "PosScanner.h"
 #include "PosStorage.h"
 #include "PosWindow.h"
 #include "PricingCalculator.h"
 #include "ProductService.h"
+#include "ReportService.h"
 
 namespace {
 
@@ -804,87 +809,115 @@ private:
     }
 };
 
-// Initialize only a store with no existing POS text files. Images are copied first,
-// so a failed import can be retried without committing an incomplete snapshot.
-Status initializePosStore(PosStorage &store, BarcodeAssetService &images,
-                          const std::filesystem::path &dataRoot)
+struct StartupOptions {
+    bool valid = true;
+    std::optional<std::filesystem::path> importSource {};
+    QString error {};
+};
+
+StartupOptions parseStartupOptions(const QStringList &arguments)
+{
+    StartupOptions options;
+    const QStringList args = arguments.mid(1);
+    if (args.isEmpty()) {
+        return options;
+    }
+
+    if (args.size() == 2 && args.at(0) == QStringLiteral("--import-increment2-catalogue")) {
+        if (args.at(1).trimmed().isEmpty()) {
+            options.valid = false;
+            options.error = QStringLiteral(
+                "Missing source directory for --import-increment2-catalogue.\n\n"
+                "Usage: Eyeris [--import-increment2-catalogue <source-root>]");
+            return options;
+        }
+        options.importSource = std::filesystem::u8path(args.at(1).toUtf8().constData());
+        return options;
+    }
+
+    options.valid = false;
+    if (args.at(0) == QStringLiteral("--import-increment2-catalogue")) {
+        options.error = QStringLiteral(
+            "Expected exactly one <source-root> directory after --import-increment2-catalogue.\n\n"
+            "Usage: Eyeris [--import-increment2-catalogue <source-root>]");
+    } else {
+        options.error = QStringLiteral(
+            "Unsupported startup argument \"%1\".\n\n"
+            "Usage: Eyeris [--import-increment2-catalogue <source-root>]")
+                            .arg(args.at(0));
+    }
+    return options;
+}
+
+Status ensureDataDirectory(const std::filesystem::path &dataRoot)
 {
     namespace fs = std::filesystem;
-    try {
-        fs::create_directories(dataRoot / "barcodes");
-        const auto lockPath = QString::fromStdString((dataRoot / ".initialize.lock").u8string());
-        QLockFile initializationLock(lockPath);
-        if (!initializationLock.tryLock(5000))
-            return {false, "Could not lock the project data directory for initialization."};
-
-        const char *files[] = {"Product.txt", "Order.txt", "OrderDetail.txt", "Bill.txt"};
-        bool initialized = false;
-        for (const char *file : files)
-            initialized = initialized || fs::exists(dataRoot / file);
-
-        Status loaded = store.load();
-        if (!loaded.success || initialized)
-            return loaded;
-
-        StoreData snapshot;
-        const QString legacyLocation = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (!legacyLocation.isEmpty()) {
-            const fs::path legacyRoot = fs::u8path(legacyLocation.toUtf8().constData());
-            bool legacyData = false;
-            if (fs::exists(legacyRoot) && !fs::equivalent(legacyRoot, dataRoot)) {
-                for (const char *file : files)
-                    legacyData = legacyData || fs::exists(legacyRoot / file);
-            }
-            if (legacyData) {
-                PosStorage legacy(legacyRoot);
-                const Status legacyLoaded = legacy.load();
-                if (!legacyLoaded.success)
-                    return {false, "Could not load legacy POS data: " + legacyLoaded.message};
-                const auto legacySnapshot = legacy.read();
-                if (!legacySnapshot.success)
-                    return {false, "Could not read legacy POS data: " + legacySnapshot.message};
-                snapshot = legacySnapshot.value;
-                for (Product &product : snapshot.products) {
-                    const fs::path source = legacyRoot / fs::u8path(product.barcodeImagePath);
-                    const std::string relative = "barcodes/" + product.barcode + ".png";
-                    const fs::path destination = dataRoot / fs::u8path(relative);
-                    if (fs::exists(source)) {
-                        if (fs::exists(destination)) {
-                            QFile oldFile(QString::fromStdString(source.u8string()));
-                            QFile newFile(QString::fromStdString(destination.u8string()));
-                            if (!oldFile.open(QIODevice::ReadOnly) || !newFile.open(QIODevice::ReadOnly))
-                                return {false, "Could not compare legacy barcode image " + product.barcode + "."};
-                            const QByteArray oldBytes = oldFile.readAll();
-                            const QByteArray newBytes = newFile.readAll();
-                            if (oldFile.error() != QFileDevice::NoError || newFile.error() != QFileDevice::NoError || oldBytes != newBytes)
-                                return {false, "Conflicting barcode image during legacy import: " + product.barcode + "."};
-                        } else {
-                            std::error_code error;
-                            fs::copy_file(source, destination, fs::copy_options::none, error);
-                            if (error) {
-                                // copy_file may leave a partial destination after a failed copy.
-                                std::error_code cleanupError;
-                                if (error != std::errc::file_exists)
-                                    fs::remove(destination, cleanupError);
-                                return {false, "Could not copy legacy barcode image " + product.barcode + ": " + error.message()};
-                            }
-                        }
-                    } else {
-                        const auto generated = images.save(product.barcode);
-                        if (!generated.success)
-                            return {false, "Could not regenerate barcode " + product.barcode + ": " + generated.message};
-                    }
-                    product.barcodeImagePath = relative;
-                }
-            }
+    std::error_code error;
+    if (fs::exists(dataRoot, error)) {
+        if (error) {
+            return {false, "Could not inspect project data directory \"" + dataRoot.u8string() +
+                               "\": " + error.message()};
         }
-        const Status saved = store.save(snapshot);
-        if (!saved.success)
-            return {false, "Could not initialize project POS data: " + saved.message};
-        return saved;
-    } catch (const std::exception &error) {
-        return {false, std::string("Could not initialize project POS data: ") + error.what()};
+        if (!fs::is_directory(dataRoot, error) || error) {
+            return {false, "Project data path is not a directory: \"" + dataRoot.u8string() + "\"."};
+        }
+        return {true, {}};
     }
+    if (error) {
+        return {false, "Could not inspect project data directory \"" + dataRoot.u8string() +
+                           "\": " + error.message()};
+    }
+    if (!fs::create_directories(dataRoot, error) && error) {
+        return {false, "Could not create project data directory \"" + dataRoot.u8string() +
+                           "\": " + error.message()};
+    }
+    return {true, {}};
+}
+
+Status acquireStoreLock(QLockFile &storeLock, const std::filesystem::path &dataRoot,
+                        const QString &lockPath)
+{
+    if (storeLock.tryLock(5000)) {
+        return {true, {}};
+    }
+
+    const std::string rootStr = dataRoot.u8string();
+    switch (storeLock.error()) {
+    case QLockFile::LockFailedError:
+        return {false, "Another Eyeris instance is already using \"" + rootStr +
+                           "\". Close the existing instance before starting Eyeris."};
+    case QLockFile::PermissionError:
+        return {false, "Permission denied creating the store lock at \"" +
+                           lockPath.toStdString() + "\"."};
+    default:
+        return {false, "Could not acquire the store lock for \"" + rootStr + "\"."};
+    }
+}
+
+QString formatLoadError(const Status &loaded, const std::filesystem::path &dataRoot,
+                        const std::optional<std::filesystem::path> &importSource)
+{
+    const QString rootPath = QString::fromStdString(dataRoot.u8string());
+    QString message = loaded.message.empty()
+                          ? QStringLiteral("Could not load POS data at \"%1\".").arg(rootPath)
+                          : QString::fromStdString(loaded.message);
+
+    const bool legacyOrMixed =
+        loaded.message.find("Legacy Increment 2") != std::string::npos ||
+        loaded.message.find("Incomplete or mixed") != std::string::npos;
+    if (legacyOrMixed) {
+        message += QStringLiteral(
+            "\n\nExisting files at \"%1\" were not modified or moved.\n"
+            "Move or copy legacy files to a separate backup directory so \"%1\" is empty, "
+            "then relaunch Eyeris (optionally with --import-increment2-catalogue <backup-root>).")
+                       .arg(rootPath);
+        if (importSource.has_value()) {
+            message += QStringLiteral(
+                           "\n\nImport from \"%1\" requires an empty Increment 3 destination at \"%2\".")
+                           .arg(QString::fromStdString(importSource->u8string()), rootPath);
+        }
+    }
+    return message;
 }
 
 } // namespace
@@ -895,26 +928,75 @@ int main(int argc, char *argv[])
     QApplication::setApplicationName(QStringLiteral("Eyeris"));
     QApplication::setOrganizationName(QStringLiteral("Eyeris"));
 
-    const auto dataRoot = std::filesystem::u8path(EYERIS_PROJECT_DATA_DIR);
-    PosStorage store(dataRoot);
-    BarcodeAssetService images(dataRoot);
-    const Status loaded = initializePosStore(store, images, dataRoot);
-    if (!loaded.success) {
-        QMessageBox::critical(nullptr, "Eyeris", QString::fromStdString(loaded.message));
+    const StartupOptions options = parseStartupOptions(QCoreApplication::arguments());
+    if (!options.valid) {
+        QMessageBox::critical(nullptr, QStringLiteral("Eyeris"), options.error);
         return 1;
     }
 
+    const auto dataRoot = std::filesystem::u8path(EYERIS_PROJECT_DATA_DIR);
+    const Status dirReady = ensureDataDirectory(dataRoot);
+    if (!dirReady.success) {
+        QMessageBox::critical(nullptr, QStringLiteral("Eyeris"),
+                              QString::fromStdString(dirReady.message));
+        return 1;
+    }
+
+    const QString lockPath = QString::fromStdString((dataRoot / ".eyeris.lock").u8string());
+    QLockFile storeLock(lockPath);
+    storeLock.setStaleLockTime(0);
+    const Status locked = acquireStoreLock(storeLock, dataRoot, lockPath);
+    if (!locked.success) {
+        QMessageBox::critical(nullptr, QStringLiteral("Eyeris"),
+                              QString::fromStdString(locked.message));
+        return 1;
+    }
+
+    PosStorage store(dataRoot);
+    const Status loaded = store.load();
+    if (!loaded.success) {
+        QMessageBox::critical(nullptr, QStringLiteral("Eyeris"),
+                              formatLoadError(loaded, dataRoot, options.importSource));
+        return 1;
+    }
+
+    if (options.importSource.has_value()) {
+        const Status imported = store.importIncrement2Catalogue(*options.importSource);
+        if (!imported.success) {
+            QMessageBox::critical(
+                nullptr, QStringLiteral("Eyeris"),
+                QStringLiteral("Could not import Increment 2 catalogue from \"%1\" into \"%2\":\n\n%3\n\n"
+                               "The source directory was not modified.")
+                    .arg(QString::fromStdString(options.importSource->u8string()),
+                         QString::fromStdString(dataRoot.u8string()),
+                         QString::fromStdString(imported.message)));
+            return 1;
+        }
+    }
+
+    BarcodeAssetService images(dataRoot);
     const IdGenerator ids;
-    const PricingCalculator pricing;
     ProductService products(store, images, ids);
-    CartService cart(products, pricing);
+    CartService cart(products);
+    const PricingCalculator pricing;
+    DiscountService discounts(store);
     ImageSource camera;
     const BarcodeDecoder decoder;
     PosScanner scanner(camera, decoder);
-    CheckoutService checkout(store, products, pricing, ids);
-    HistoryService history(store, products);
-    PosWindow window(products, images, cart, scanner, checkout, history);
+    const BillPdfService pdf(dataRoot);
+    HistoryService history(store, products, pdf);
+    const Status pdfRecovered = history.recoverPdfRemovals();
+    CheckoutService checkout(store, products, pricing, discounts, ids, history);
+    const ReportService reports(store, products);
+    ManagerPinService access(&app);
+
+    PosWindow window(products, discounts, cart, scanner, checkout, history, reports, access);
+    if (!pdfRecovered.success) {
+        window.setPdfRecoveryWarning(
+            pdfRecovered.message.empty()
+                ? std::string("Startup PDF recovery failed. Affected PDF and archive actions are unavailable until resolved.")
+                : pdfRecovered.message);
+    }
     window.show();
-    window.showPage("Current Order");
     return app.exec();
 }
